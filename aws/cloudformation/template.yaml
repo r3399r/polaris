@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: "AWS::Serverless-2016-10-31"
+Description: polaris deployment cloudformation script
+    
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+      Timeout: 30  # in seconds
+Parameters:
+  Project:
+    Type: String
+  TargetEnvr:
+    Type: String
+    Description: The target environment for API Gateway deployment.
+Resources:
+  ##########################################
+  ##### AWS IAM Role to execute lambda #####
+  ##########################################
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      RoleName: !Sub ${Project}-${TargetEnvr}-lambda-execution-role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSLambda_FullAccess
+  ##############################################
+  ##### API Gateway and associated Lambdas #####
+  ##############################################
+  LambdaMonitor:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: [arm64]
+      Handler: index.eventBridgeMonitor
+      Runtime: nodejs18.x
+      FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
+      Role: !GetAtt ExecutionRole.Arn
+      CodeUri: ../../lib/src
+      MemorySize: 200
+      Layers: [!Ref LambdaLayer]
+      Environment:
+        Variables:
+          PROJECT: !Sub ${Project}
+          DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
+          DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
+          DB_PWD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
+          DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          SHEET_ID: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-spreadsheet-id}}'
+          CLIENT_EMAIL: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-client-email}}'
+          PRIVATE_KEY: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-private-key}}'
+  InvokePermissionMonitor:
+    Type: AWS::Lambda::Permission
+    DependsOn: [EventBridgeMonitor, LambdaMonitor]
+    Properties:
+      FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventBridgeMonitor.Arn
+  LambdaLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub ${Project}-${TargetEnvr}-layer
+      CompatibleArchitectures: [arm64]
+      CompatibleRuntimes: [nodejs18.x]
+      ContentUri: ../../dist
+      RetentionPolicy: Delete
+  #######################
+  ##### EventBridge #####
+  #######################
+  EventBridgeMonitor:
+    Type: AWS::Events::Rule
+    DependsOn: [LambdaMonitor]
+    Properties:
+      Name: !Sub ${Project}-${TargetEnvr}-monitor
+      ScheduleExpression: cron(31 */12 * * ? *)
+      State: ENABLED
+      Targets: 
+        - Arn: !GetAtt LambdaMonitor.Arn
+          Id: !Sub ${Project}-${TargetEnvr}-monitor
