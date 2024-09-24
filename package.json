@@ -1,6 +1,6 @@
 {
-  "name": "@y-celestial/spica-service",
-  "version": "1.4.2",
+  "name": "polaris",
+  "version": "1.0.0",
   "author": "Yue Chang",
   "scripts": {
     "lint:es": "eslint -c ./eslint.json src",
