@@ -28,8 +28,13 @@ export class DbAccess {
     await qr.rollbackTransaction();
   }
 
-  public async resetSqlStats() {
+  public async query(sql: string, parameters?: any[]) {
     const qr = await this.database.getQueryRunner();
-    await qr.manager.query('select crdb_internal.reset_sql_stats()');
+
+    return await qr.manager.query(sql, parameters);
+  }
+
+  public async resetSqlStats() {
+    await this.query('select crdb_internal.reset_sql_stats()');
   }
 }

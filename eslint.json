@@ -39,6 +39,7 @@
     "newline-before-return": [
       "error"
     ],
+    "no-constant-condition": "off",
     "no-restricted-imports": [
       "error",
       {

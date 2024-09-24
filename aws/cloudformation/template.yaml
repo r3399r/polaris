@@ -80,7 +80,7 @@ Resources:
     DependsOn: [LambdaMonitor]
     Properties:
       Name: !Sub ${Project}-${TargetEnvr}-monitor
-      ScheduleExpression: cron(31 */12 * * ? *)
+      ScheduleExpression: cron(1 */12 * * ? *)
       State: ENABLED
       Targets: 
         - Arn: !GetAtt LambdaMonitor.Arn

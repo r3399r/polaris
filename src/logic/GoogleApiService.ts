@@ -9,7 +9,7 @@ import { injectable } from 'inversify';
 export class GoogleApiService {
   private spreadsheet: GoogleSpreadsheet | undefined;
 
-  public async getSheet(title?: string) {
+  public async getSheet(title: string) {
     if (this.spreadsheet === undefined) {
       this.spreadsheet = new GoogleSpreadsheet(
         process.env.SHEET_ID ?? '',
@@ -23,8 +23,9 @@ export class GoogleApiService {
       await this.spreadsheet.loadInfo();
     }
 
-    if (title) return this.spreadsheet.sheetsByTitle[title];
+    const sheet = this.spreadsheet.sheetsByTitle[title];
+    if (!sheet) await this.spreadsheet.addSheet({ title });
 
-    return this.spreadsheet.sheetsByIndex[0];
+    return this.spreadsheet.sheetsByTitle[title];
   }
 }

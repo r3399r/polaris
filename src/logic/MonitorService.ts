@@ -1,6 +1,8 @@
 import { inject, injectable } from 'inversify';
-import { MBookAccess } from 'src/access/spica/MBookAccess';
-import { MBook } from 'src/model/entity/spica/MBookEntity';
+import { DbAccess } from 'src/access/DbAccess';
+import { MonitorAccess } from 'src/access/MonitorAccess';
+import { MonitorHisAccess } from 'src/access/MonitorHisAccess';
+import { MonitorHisEntity } from 'src/model/entity/MonitorHisEntity';
 import { GoogleApiService } from './GoogleApiService';
 
 /**
@@ -8,28 +10,53 @@ import { GoogleApiService } from './GoogleApiService';
  */
 @injectable()
 export class MonitorService {
-  @inject(MBookAccess)
-  private readonly mBookAccess!: MBookAccess;
+  @inject(DbAccess)
+  private readonly dbAccess!: DbAccess;
+
+  @inject(MonitorAccess)
+  private readonly monitorAccess!: MonitorAccess;
+
+  @inject(MonitorHisAccess)
+  private readonly monitorHisAccess!: MonitorHisAccess;
 
   @inject(GoogleApiService)
   private readonly googleApiService!: GoogleApiService;
 
-  public async saveDataToGoogleSheet() {
-    const count = await this.mBookAccess.count();
-    const rowsPerQuery = 200;
-    const data: MBook[] = [];
-    for (let i = 0; i < count; i += rowsPerQuery) {
-      const rows = await this.mBookAccess.find({
-        skip: i,
-        take: rowsPerQuery,
-      });
-      data.push(...rows);
-    }
+  public async monitorAll() {
+    const monitors = await this.monitorAccess.find();
 
-    // save to google sheet
-    const sheet = await this.googleApiService.getSheet('m_book');
-    await sheet.clear();
-    await sheet.setHeaderRow(['id', 'dateCreated']);
-    await sheet.addRows(data);
+    const LIMIT = 200;
+    for (const m of monitors) {
+      // check do refresh or not
+      const currentHour = new Date().getHours();
+      if (currentHour % Number(m.refreshPeriod) !== 0) continue;
+
+      // query
+      const startTimestamp = Date.now();
+      const data = [];
+      let offset = 0;
+      while (true) {
+        const rows = await this.dbAccess.query(
+          `${m.sql} limit ${LIMIT} offset ${offset}`
+        );
+        data.push(...rows);
+        offset = offset + LIMIT;
+        if (rows.length === 0) break;
+      }
+      const elapsedTime = Date.now() - startTimestamp;
+
+      if (data.length === 0) continue;
+      const monitorHisEntity = new MonitorHisEntity();
+      monitorHisEntity.name = m.name;
+      monitorHisEntity.rowCount = data.length.toString();
+      monitorHisEntity.elapsedTime = elapsedTime;
+      await this.monitorHisAccess.save(monitorHisEntity);
+
+      // save
+      const sheet = await this.googleApiService.getSheet(m.name);
+      await sheet.clear();
+      await sheet.setHeaderRow(Object.keys(data[0]));
+      await sheet.addRows(data);
+    }
   }
 }
