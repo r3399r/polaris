@@ -25,7 +25,9 @@ export class MonitorService {
   public async monitorAll() {
     const monitors = await this.monitorAccess.find();
 
-    const LIMIT = 200;
+    const LIMIT = Number(process.env.SQL_LIMIT);
+    if (isNaN(LIMIT)) throw new Error('SQL_LIMIT is not a number');
+
     for (const m of monitors) {
       // check do refresh or not
       const currentHour = new Date().getHours();
@@ -35,13 +37,22 @@ export class MonitorService {
       const startTimestamp = Date.now();
       const data = [];
       let offset = 0;
-      while (true) {
-        const rows = await this.dbAccess.query(
-          `${m.sql} limit ${LIMIT} offset ${offset}`
-        );
-        data.push(...rows);
-        offset = offset + LIMIT;
-        if (rows.length === 0) break;
+
+      try {
+        while (true) {
+          const rows = await this.dbAccess.query(
+            `${m.sql} limit ${LIMIT} offset ${offset}`
+          );
+          data.push(...rows);
+          offset = offset + LIMIT;
+          if (rows.length === 0) break;
+        }
+      } catch (e) {
+        const monitorHisEntity = new MonitorHisEntity();
+        monitorHisEntity.name = m.name;
+        monitorHisEntity.success = false;
+        await this.monitorHisAccess.save(monitorHisEntity);
+        continue;
       }
       const elapsedTime = Date.now() - startTimestamp;
 
@@ -50,6 +61,7 @@ export class MonitorService {
       monitorHisEntity.name = m.name;
       monitorHisEntity.rowCount = data.length.toString();
       monitorHisEntity.elapsedTime = elapsedTime;
+      monitorHisEntity.success = true;
       await this.monitorHisAccess.save(monitorHisEntity);
 
       // save
