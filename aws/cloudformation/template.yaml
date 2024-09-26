@@ -56,6 +56,7 @@ Resources:
           SHEET_ID: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-spreadsheet-id}}'
           CLIENT_EMAIL: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-client-email}}'
           PRIVATE_KEY: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-private-key}}'
+          SQL_LIMIT: 300
   InvokePermissionMonitor:
     Type: AWS::Lambda::Permission
     DependsOn: [EventBridgeMonitor, LambdaMonitor]
