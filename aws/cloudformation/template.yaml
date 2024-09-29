@@ -32,6 +32,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AWSLambda_FullAccess
+        - arn:aws:iam::aws:policy/AmazonSQSFullAccess
   ##############################################
   ##### API Gateway and associated Lambdas #####
   ##############################################
@@ -44,7 +45,7 @@ Resources:
       FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
-      MemorySize: 200
+      MemorySize: 190
       Layers: [!Ref LambdaLayer]
       Environment:
         Variables:
@@ -65,6 +66,24 @@ Resources:
       Action: 'lambda:InvokeFunction'
       Principal: events.amazonaws.com
       SourceArn: !GetAtt EventBridgeMonitor.Arn
+  LambdaLogger:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: [arm64]
+      Handler: index.logger
+      Runtime: nodejs18.x
+      FunctionName: !Sub ${Project}-${TargetEnvr}-logger
+      Role: !GetAtt ExecutionRole.Arn
+      CodeUri: ../../lib/src
+      MemorySize: 128
+      Layers: [!Ref LambdaLayer]
+      Environment:
+        Variables:
+          PROJECT: !Sub ${Project}
+          DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
+          DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
+          DB_PWD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
+          DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
   LambdaLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
@@ -73,6 +92,19 @@ Resources:
       CompatibleRuntimes: [nodejs18.x]
       ContentUri: ../../dist
       RetentionPolicy: Delete
+  #######################
+  ######### SQS #########
+  #######################
+  LoggerQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${Project}-${TargetEnvr}-logger-queue
+  EventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: [LambdaLogger, LoggerQueue]
+    Properties:
+      FunctionName: !GetAtt LambdaLogger.Arn
+      EventSourceArn: !GetAtt LoggerQueue.Arn
   #######################
   ##### EventBridge #####
   #######################
