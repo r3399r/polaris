@@ -3,13 +3,10 @@ set -e
 
 env=$1
 project=polaris
-# subDomain=bunnybill
-# domain=celestialstudio.net
 
 echo ====================================================================================
 echo env: $env
 echo project: $project
-# echo domain: $subDomain.$domain
 echo ====================================================================================
 
 echo deploy backend AWS...

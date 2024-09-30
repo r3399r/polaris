@@ -1,5 +1,5 @@
 import { inject, injectable } from 'inversify';
-import { LogApiAccess } from 'src/access/MonitorAccess copy';
+import { LogApiAccess } from 'src/access/LogApiAccess';
 import { LogApiEntity } from 'src/model/entity/LogApiEntity';
 import { LoggerInput } from 'src/model/Logger';
 
