@@ -45,7 +45,7 @@ Resources:
       FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
-      MemorySize: 190
+      MemorySize: 160
       Layers: [!Ref LambdaLayer]
       Environment:
         Variables:
@@ -57,7 +57,7 @@ Resources:
           SHEET_ID: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-spreadsheet-id}}'
           CLIENT_EMAIL: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-client-email}}'
           PRIVATE_KEY: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-private-key}}'
-          SQL_LIMIT: 300
+          SQL_LIMIT: 500
   InvokePermissionMonitor:
     Type: AWS::Lambda::Permission
     DependsOn: [EventBridgeMonitor, LambdaMonitor]
@@ -105,6 +105,9 @@ Resources:
     Properties:
       FunctionName: !GetAtt LambdaLogger.Arn
       EventSourceArn: !GetAtt LoggerQueue.Arn
+      BatchSize: 50
+      MaximumBatchingWindowInSeconds: 300
+      Enabled: true
   #######################
   ##### EventBridge #####
   #######################

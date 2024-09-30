@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { Container } from 'inversify';
 import { DbAccess } from './access/DbAccess';
 import { MonitorAccess } from './access/MonitorAccess';
-import { LogApiAccess } from './access/MonitorAccess copy';
+import { LogApiAccess } from './access/LogApiAccess';
 import { MonitorHisAccess } from './access/MonitorHisAccess';
 import { GoogleApiService } from './logic/GoogleApiService';
 import { LoggerService } from './logic/LoggerService';
