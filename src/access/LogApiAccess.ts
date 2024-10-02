@@ -11,12 +11,10 @@ export class LogApiAccess {
   @inject(Database)
   private readonly database!: Database;
 
-  public async save(data: LogApi) {
+  public async saveMany(data: LogApi[]) {
     const qr = await this.database.getQueryRunner();
-    const entity = new LogApiEntity();
-    Object.assign(entity, data);
 
-    return await qr.manager.save(entity);
+    return await qr.manager.save(data);
   }
 
   public async hardDelete(options: FindManyOptions<LogApi>) {
