@@ -1,10 +1,11 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
 import { DbAccess } from './access/DbAccess';
-import { MonitorAccess } from './access/MonitorAccess';
 import { LogApiAccess } from './access/LogApiAccess';
+import { MonitorAccess } from './access/MonitorAccess';
 import { MonitorHisAccess } from './access/MonitorHisAccess';
 import { GoogleApiService } from './logic/GoogleApiService';
+import { HouseKeepingService } from './logic/HouseKeepingService';
 import { LoggerService } from './logic/LoggerService';
 import { MonitorService } from './logic/MonitorService';
 import { LogApiEntity } from './model/entity/LogApiEntity';
@@ -30,7 +31,8 @@ container.bind<LogApiAccess>(LogApiAccess).toSelf();
 // service
 container.bind<MonitorService>(MonitorService).toSelf();
 container.bind<GoogleApiService>(GoogleApiService).toSelf().inSingletonScope();
-container.bind<LoggerService>(LoggerService).toSelf().inSingletonScope();
+container.bind<LoggerService>(LoggerService).toSelf();
+container.bind<HouseKeepingService>(HouseKeepingService).toSelf();
 
 // AWS
 // container.bind<SES>(SES).toDynamicValue(() => new SES());

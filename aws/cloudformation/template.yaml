@@ -66,6 +66,32 @@ Resources:
       Action: 'lambda:InvokeFunction'
       Principal: events.amazonaws.com
       SourceArn: !GetAtt EventBridgeMonitor.Arn
+  LambdaHouseKeeping:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: [arm64]
+      Handler: index.eventBridgeHouseKeeping
+      Runtime: nodejs18.x
+      FunctionName: !Sub ${Project}-${TargetEnvr}-house-keeping
+      Role: !GetAtt ExecutionRole.Arn
+      CodeUri: ../../lib/src
+      MemorySize: 128
+      Layers: [!Ref LambdaLayer]
+      Environment:
+        Variables:
+          PROJECT: !Sub ${Project}
+          DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
+          DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
+          DB_PWD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
+          DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+  InvokePermissionHouseKeeping:
+    Type: AWS::Lambda::Permission
+    DependsOn: [EventBridgeHouseKeeping, LambdaHouseKeeping]
+    Properties:
+      FunctionName: !Sub ${Project}-${TargetEnvr}-house-keeping
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventBridgeHouseKeeping.Arn
   LambdaLogger:
     Type: AWS::Serverless::Function
     Properties:
@@ -121,3 +147,13 @@ Resources:
       Targets: 
         - Arn: !GetAtt LambdaMonitor.Arn
           Id: !Sub ${Project}-${TargetEnvr}-monitor
+  EventBridgeHouseKeeping:
+    Type: AWS::Events::Rule
+    DependsOn: [LambdaHouseKeeping]
+    Properties:
+      Name: !Sub ${Project}-${TargetEnvr}-house-keeping
+      ScheduleExpression: cron(31 19 * * ? *)
+      State: ENABLED
+      Targets: 
+        - Arn: !GetAtt LambdaHouseKeeping.Arn
+          Id: !Sub ${Project}-${TargetEnvr}-house-keeping
