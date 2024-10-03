@@ -47,6 +47,22 @@ export class MonitorService {
           offset = offset + LIMIT;
           if (rows.length === 0) break;
         }
+        const elapsedTime = Date.now() - startTimestamp;
+
+        if (data.length === 0) continue;
+
+        // save
+        const sheet = await this.googleApiService.getSheet(m.name);
+        await sheet.clear();
+        await sheet.setHeaderRow(Object.keys(data[0]));
+        await sheet.addRows(data);
+
+        const monitorHisEntity = new MonitorHisEntity();
+        monitorHisEntity.name = m.name;
+        monitorHisEntity.rowCount = data.length.toString();
+        monitorHisEntity.elapsedTime = elapsedTime;
+        monitorHisEntity.success = true;
+        await this.monitorHisAccess.save(monitorHisEntity);
       } catch (e) {
         const monitorHisEntity = new MonitorHisEntity();
         monitorHisEntity.name = m.name;
@@ -54,21 +70,6 @@ export class MonitorService {
         await this.monitorHisAccess.save(monitorHisEntity);
         continue;
       }
-      const elapsedTime = Date.now() - startTimestamp;
-
-      if (data.length === 0) continue;
-      const monitorHisEntity = new MonitorHisEntity();
-      monitorHisEntity.name = m.name;
-      monitorHisEntity.rowCount = data.length.toString();
-      monitorHisEntity.elapsedTime = elapsedTime;
-      monitorHisEntity.success = true;
-      await this.monitorHisAccess.save(monitorHisEntity);
-
-      // save
-      const sheet = await this.googleApiService.getSheet(m.name);
-      await sheet.clear();
-      await sheet.setHeaderRow(Object.keys(data[0]));
-      await sheet.addRows(data);
     }
   }
 }
