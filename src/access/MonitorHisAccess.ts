@@ -27,13 +27,4 @@ export class MonitorHisAccess {
 
     return await qr.manager.find<MonitorHis>(MonitorHisEntity.name, options);
   }
-
-  public async hardDelete(options: FindManyOptions<MonitorHis>) {
-    const qr = await this.database.getQueryRunner();
-    const res = await qr.manager.find<MonitorHis>(
-      MonitorHisEntity.name,
-      options
-    );
-    await qr.manager.remove(res);
-  }
 }
