@@ -76,6 +76,7 @@ Resources:
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
       MemorySize: 128
+      Timeout: 180
       Layers: [!Ref LambdaLayer]
       Environment:
         Variables:
