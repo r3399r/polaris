@@ -10,7 +10,7 @@ export type LogApi = {
   body: string | null;
   statusCode: string;
   elapsedTime: string;
-  version:string |null;
+  version: string | null;
   dateRequested: string;
   dateCreated: string;
 };

@@ -7,6 +7,6 @@ export type LoggerInput = {
   body: string | null;
   elapsedTime: number;
   statusCode: number;
-  version:string|null
+  version: string | null;
   dateRequested: string;
 };
