@@ -10,6 +10,7 @@ export type LogApi = {
   body: string | null;
   statusCode: string;
   elapsedTime: string;
+  version: string | null;
   dateRequested: string;
   dateCreated: string;
 };
@@ -43,6 +44,9 @@ export class LogApiEntity implements LogApi {
 
   @Column({ type: 'int8', name: 'elapsed_time' })
   elapsedTime!: string;
+
+  @Column({ type: 'text' })
+  version: string | null = null;
 
   @Column({ type: 'timestamp', name: 'date_requested' })
   dateRequested!: string;

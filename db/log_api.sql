@@ -8,6 +8,7 @@ create table log_api (
     body STRING NULL,
     status_code INT8 NOT NULL,
     elapsed_time INT8 NOT NULL,
+    version STRING NULL,
 	date_requested TIMESTAMP NOT NULL,
 	date_created TIMESTAMP NOT NULL,
     PRIMARY KEY (id)
