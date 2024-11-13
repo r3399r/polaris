@@ -4,6 +4,7 @@ export type Monitor = {
   name: string;
   sql: string;
   refreshPeriod: string;
+  append: boolean;
 };
 
 @Entity({ name: 'monitor' })
@@ -16,4 +17,7 @@ export class MonitorEntity implements Monitor {
 
   @Column({ type: 'int8', name: 'refresh_period' })
   refreshPeriod!: string;
+
+  @Column({ type: 'bool' })
+  append!: boolean;
 }
