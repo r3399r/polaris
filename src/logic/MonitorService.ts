@@ -53,7 +53,7 @@ export class MonitorService {
 
         // save
         const sheet = await this.googleApiService.getSheet(m.name);
-        await sheet.clear();
+        if (m.append === false) await sheet.clear();
         await sheet.setHeaderRow(Object.keys(data[0]));
         await sheet.addRows(data);
 
