@@ -5,6 +5,5 @@ create table monitor_his (
 	elapsed_time float null,
 	success boolean null,
 	date_created TIMESTAMP NULL,
-	PRIMARY KEY (id ASC),
-	FOREIGN KEY (name) REFERENCES monitor (name)
+	PRIMARY KEY (id ASC)
 );
