@@ -20,7 +20,7 @@ export class HouseKeepingService {
 
     // clean log of api
     await this.dbAccess.query(
-      "delete from log_api la where la.date_created < NOW() - interval '14 day'"
+      "delete from log_api la where la.date_created < NOW() - interval '5 day'"
     );
   }
 }
