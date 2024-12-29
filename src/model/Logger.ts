@@ -8,5 +8,6 @@ export type LoggerInput = {
   elapsedTime: number;
   statusCode: number;
   version: string | null;
+  ip: string | null;
   dateRequested: string;
 };

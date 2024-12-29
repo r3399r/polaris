@@ -28,6 +28,7 @@ export class LoggerService {
       logApiEntity.statusCode = String(data.statusCode);
       logApiEntity.elapsedTime = String(data.elapsedTime);
       logApiEntity.version = data.version;
+      logApiEntity.ip = data.ip;
       logApiEntity.dateRequested = data.dateRequested;
 
       logApiEntities.push(logApiEntity);
