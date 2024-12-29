@@ -48,6 +48,9 @@ export class LogApiEntity implements LogApi {
   @Column({ type: 'text' })
   version: string | null = null;
 
+  @Column({ type: 'text' })
+  ip: string | null = null;
+
   @Column({ type: 'timestamp', name: 'date_requested' })
   dateRequested!: string;
 
