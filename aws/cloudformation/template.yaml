@@ -41,7 +41,7 @@ Resources:
     Properties:
       Architectures: [arm64]
       Handler: index.eventBridgeMonitor
-      Runtime: nodejs18.x
+      Runtime: nodejs20.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
@@ -71,7 +71,7 @@ Resources:
     Properties:
       Architectures: [arm64]
       Handler: index.eventBridgeHouseKeeping
-      Runtime: nodejs18.x
+      Runtime: nodejs20.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-house-keeping
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
@@ -98,7 +98,7 @@ Resources:
     Properties:
       Architectures: [arm64]
       Handler: index.logger
-      Runtime: nodejs18.x
+      Runtime: nodejs20.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-logger
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
@@ -116,22 +116,19 @@ Resources:
     Properties:
       LayerName: !Sub ${Project}-${TargetEnvr}-layer
       CompatibleArchitectures: [arm64]
-      CompatibleRuntimes: [nodejs18.x]
+      CompatibleRuntimes: [nodejs20.x]
       ContentUri: ../../dist
       RetentionPolicy: Delete
   #######################
   ######### SQS #########
   #######################
-  LoggerQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub ${Project}-${TargetEnvr}-logger-queue
   EventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
-    DependsOn: [LambdaLogger, LoggerQueue]
+    DependsOn: [LambdaLogger]
     Properties:
       FunctionName: !GetAtt LambdaLogger.Arn
-      EventSourceArn: !GetAtt LoggerQueue.Arn
+      EventSourceArn: 
+        Fn::ImportValue: !Sub ${Project}-${TargetEnvr}-logger-queue-arn
       BatchSize: 50
       MaximumBatchingWindowInSeconds: 300
       Enabled: true
