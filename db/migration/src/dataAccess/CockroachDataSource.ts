@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { BeforeInsert, Column, DataSource, Entity, Generated } from "typeorm";
+import { BeforeInsert, Column, DataSource, Entity, Generated } from 'typeorm';
 
 export type LogApi = {
   id: string;
@@ -64,9 +64,8 @@ export class LogApiEntity implements LogApi {
   }
 }
 
-
 export const CockroachDataSource = new DataSource({
-  type: "cockroachdb",
+  type: 'cockroachdb',
   host: process.env.COCKROACH_DB_HOST,
   port: 26257,
   username: process.env.COCKROACH_DB_USER,

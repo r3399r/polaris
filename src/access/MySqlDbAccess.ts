@@ -1,13 +1,13 @@
 import { inject, injectable } from 'inversify';
-import { Database } from 'src/util/Database';
+import { MySqlDatabase } from 'src/util/MySqlDatabase';
 
 /**
  * Access class for common Db functions.
  */
 @injectable()
-export class DbAccess {
-  @inject(Database)
-  private readonly database!: Database;
+export class MySqlDbAccess {
+  @inject(MySqlDatabase)
+  private readonly database!: MySqlDatabase;
 
   public async cleanup() {
     await this.database.cleanUp();
@@ -32,9 +32,5 @@ export class DbAccess {
     const qr = await this.database.getQueryRunner();
 
     return await qr.manager.query(sql, parameters);
-  }
-
-  public async resetSqlStats() {
-    await this.query('select crdb_internal.reset_sql_stats()');
   }
 }

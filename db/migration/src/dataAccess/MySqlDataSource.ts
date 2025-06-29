@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { BeforeInsert, Column, DataSource, Entity, Generated } from "typeorm";
+import { BeforeInsert, Column, DataSource, Entity, Generated } from 'typeorm';
 
 export type LogApi = {
   id: string;
@@ -31,7 +31,7 @@ export class LogApiEntity implements LogApi {
   @Column({ type: 'varchar', length: 255 })
   path!: string;
 
-  @Column({ type: 'varchar', length: 16 ,name:'http_method'})
+  @Column({ type: 'varchar', length: 16, name: 'http_method' })
   httpMethod!: string;
 
   @Column({ type: 'text', name: 'query_string_param' })
@@ -64,9 +64,8 @@ export class LogApiEntity implements LogApi {
   }
 }
 
-
 export const MySqlDataSource = new DataSource({
-  type: "mysql",
+  type: 'mysql',
   host: process.env.MYSQL_DB_HOST,
   port: 3306,
   username: process.env.MYSQL_DB_USER,

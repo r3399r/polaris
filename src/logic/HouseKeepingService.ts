@@ -1,13 +1,13 @@
 import { inject, injectable } from 'inversify';
-import { DbAccess } from 'src/access/DbAccess';
+import { CockroachDbAccess } from 'src/access/CockroachDbAccess';
 
 /**
  * Service class for House Keeping
  */
 @injectable()
 export class HouseKeepingService {
-  @inject(DbAccess)
-  private readonly dbAccess!: DbAccess;
+  @inject(CockroachDbAccess)
+  private readonly dbAccess!: CockroachDbAccess;
 
   public async houseKeep() {
     // clean cockroach db
@@ -19,8 +19,8 @@ export class HouseKeepingService {
     );
 
     // clean log of api
-    await this.dbAccess.query(
-      "delete from log_api la where la.date_created < NOW() - interval '5 day'"
-    );
+    // await this.dbAccess.query(
+    //   "delete from log_api la where la.date_created < NOW() - interval '5 day'"
+    // );
   }
 }

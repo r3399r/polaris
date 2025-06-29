@@ -17,20 +17,20 @@ export type LogApi = {
 
 @Entity({ name: 'log_api' })
 export class LogApiEntity implements LogApi {
-  @Column({ primary: true })
+  @Column({ primary: true, type: 'varchar', length: 36 })
   @Generated('uuid')
   id!: string;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'varchar', length: 255 })
   project!: string;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'varchar', length: 255 })
   resource!: string;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'varchar', length: 255 })
   path!: string;
 
-  @Column({ type: 'text', name: 'http_method' })
+  @Column({ type: 'varchar', length: 16, name: 'http_method' })
   httpMethod!: string;
 
   @Column({ type: 'text', name: 'query_string_param' })
@@ -39,22 +39,22 @@ export class LogApiEntity implements LogApi {
   @Column({ type: 'text' })
   body: string | null = null;
 
-  @Column({ type: 'int8', name: 'status_code' })
+  @Column({ type: 'int', name: 'status_code' })
   statusCode!: string;
 
-  @Column({ type: 'int8', name: 'elapsed_time' })
+  @Column({ type: 'int', name: 'elapsed_time' })
   elapsedTime!: string;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'varchar', length: 64 })
   version: string | null = null;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'varchar', length: 64 })
   ip: string | null = null;
 
-  @Column({ type: 'timestamp', name: 'date_requested' })
+  @Column({ type: 'datetime', name: 'date_requested' })
   dateRequested!: string;
 
-  @Column({ type: 'timestamp', name: 'date_created' })
+  @Column({ type: 'datetime', name: 'date_created' })
   dateCreated!: string;
 
   @BeforeInsert()

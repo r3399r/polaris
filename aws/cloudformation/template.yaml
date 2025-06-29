@@ -33,6 +33,7 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AWSLambda_FullAccess
         - arn:aws:iam::aws:policy/AmazonSQSFullAccess
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
   ##############################################
   ##### API Gateway and associated Lambdas #####
   ##############################################
@@ -50,10 +51,10 @@ Resources:
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
-          DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
-          DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
-          DB_PWD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
-          DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          COCKROACH_DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
+          COCKROACH_DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
+          COCKROACH_DB_PASSWORD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
+          COCKROACH_DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
           SHEET_ID: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-spreadsheet-id}}'
           CLIENT_EMAIL: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-client-email}}'
           PRIVATE_KEY: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-private-key}}'
@@ -81,10 +82,10 @@ Resources:
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
-          DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
-          DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
-          DB_PWD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
-          DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          COCKROACH_DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
+          COCKROACH_DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
+          COCKROACH_DB_PASSWORD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
+          COCKROACH_DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
   InvokePermissionHouseKeeping:
     Type: AWS::Lambda::Permission
     DependsOn: [EventBridgeHouseKeeping, LambdaHouseKeeping]
@@ -104,13 +105,18 @@ Resources:
       CodeUri: ../../lib/src
       MemorySize: 128
       Layers: [!Ref LambdaLayer]
+      VpcConfig:
+        SecurityGroupIds: 
+          - sg-00b9879bcad3e4697
+        SubnetIds: 
+          - subnet-0608d15aefe1735ec
+          - subnet-0deab5ad0e63af50d
+          - subnet-03ac3380f6870bb72
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
-          DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
-          DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
-          DB_PWD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
-          DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          MYSQL_DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-mysql-host}}'
+          MYSQL_DB_PASSWORD: !Sub '{{resolve:ssm:${TargetEnvr}-mysql-${Project}-pwd}}'
   LambdaLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
@@ -141,7 +147,7 @@ Resources:
     Properties:
       Name: !Sub ${Project}-${TargetEnvr}-monitor
       ScheduleExpression: cron(1 0 * * ? *)
-      State: ENABLED
+      State: DISABLED
       Targets: 
         - Arn: !GetAtt LambdaMonitor.Arn
           Id: !Sub ${Project}-${TargetEnvr}-monitor
@@ -151,7 +157,7 @@ Resources:
     Properties:
       Name: !Sub ${Project}-${TargetEnvr}-house-keeping
       ScheduleExpression: cron(31 19 * * ? *)
-      State: ENABLED
+      State: DISABLED
       Targets: 
         - Arn: !GetAtt LambdaHouseKeeping.Arn
           Id: !Sub ${Project}-${TargetEnvr}-house-keeping

@@ -1,5 +1,5 @@
 import { inject, injectable } from 'inversify';
-import { DbAccess } from 'src/access/DbAccess';
+import { CockroachDbAccess } from 'src/access/CockroachDbAccess';
 import { MonitorAccess } from 'src/access/MonitorAccess';
 import { MonitorHisAccess } from 'src/access/MonitorHisAccess';
 import { MonitorHisEntity } from 'src/model/entity/MonitorHisEntity';
@@ -10,8 +10,8 @@ import { GoogleApiService } from './GoogleApiService';
  */
 @injectable()
 export class MonitorService {
-  @inject(DbAccess)
-  private readonly dbAccess!: DbAccess;
+  @inject(CockroachDbAccess)
+  private readonly dbAccess!: CockroachDbAccess;
 
   @inject(MonitorAccess)
   private readonly monitorAccess!: MonitorAccess;
