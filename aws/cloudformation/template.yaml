@@ -115,8 +115,9 @@ Resources:
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
-          MYSQL_DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-mysql-host}}'
-          MYSQL_DB_PASSWORD: !Sub '{{resolve:ssm:${TargetEnvr}-mysql-${Project}-pwd}}'
+          MYSQL_DB_HOST:
+            Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
+          MYSQL_DB_PASSWORD: !Sub '{{resolve:ssm:mysql-${TargetEnvr}-${Project}-pwd}}'
   LambdaLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
@@ -147,7 +148,7 @@ Resources:
     Properties:
       Name: !Sub ${Project}-${TargetEnvr}-monitor
       ScheduleExpression: cron(1 0 * * ? *)
-      State: DISABLED
+      State: ENABLED
       Targets: 
         - Arn: !GetAtt LambdaMonitor.Arn
           Id: !Sub ${Project}-${TargetEnvr}-monitor
@@ -157,7 +158,7 @@ Resources:
     Properties:
       Name: !Sub ${Project}-${TargetEnvr}-house-keeping
       ScheduleExpression: cron(31 19 * * ? *)
-      State: DISABLED
+      State: ENABLED
       Targets: 
         - Arn: !GetAtt LambdaHouseKeeping.Arn
           Id: !Sub ${Project}-${TargetEnvr}-house-keeping
