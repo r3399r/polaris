@@ -4,15 +4,15 @@ import {
   MonitorHis,
   MonitorHisEntity,
 } from 'src/model/entity/MonitorHisEntity';
-import { Database } from 'src/util/Database';
+import { CockroachDatabase } from 'src/util/CockroachDatabase';
 
 /**
  * Access class for MonitorHis model.
  */
 @injectable()
 export class MonitorHisAccess {
-  @inject(Database)
-  private readonly database!: Database;
+  @inject(CockroachDatabase)
+  private readonly database!: CockroachDatabase;
 
   public async save(data: MonitorHis) {
     const qr = await this.database.getQueryRunner();

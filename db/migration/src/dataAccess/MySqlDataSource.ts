@@ -1,4 +1,5 @@
-import { BeforeInsert, Column, Entity, Generated } from 'typeorm';
+import 'reflect-metadata';
+import { BeforeInsert, Column, DataSource, Entity, Generated } from 'typeorm';
 
 export type LogApi = {
   id: string;
@@ -62,3 +63,15 @@ export class LogApiEntity implements LogApi {
     this.dateCreated = new Date().toISOString();
   }
 }
+
+export const MySqlDataSource = new DataSource({
+  type: 'mysql',
+  host: process.env.MYSQL_DB_HOST,
+  port: 3306,
+  username: process.env.MYSQL_DB_USER,
+  password: process.env.MYSQL_DB_PASSWORD,
+  database: process.env.MYSQL_DB_DATABASE,
+  synchronize: false,
+  logging: false,
+  entities: [LogApiEntity],
+});

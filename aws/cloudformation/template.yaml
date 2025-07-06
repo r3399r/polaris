@@ -28,11 +28,12 @@ Resources:
                 - lambda.amazonaws.com
             Action:
               - sts:AssumeRole
-      RoleName: !Sub ${Project}-${TargetEnvr}-lambda-execution-role
+      RoleName: !Sub ${Project}-${TargetEnvr}-lambda-execution-role-2
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AWSLambda_FullAccess
         - arn:aws:iam::aws:policy/AmazonSQSFullAccess
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
   ##############################################
   ##### API Gateway and associated Lambdas #####
   ##############################################
@@ -41,7 +42,7 @@ Resources:
     Properties:
       Architectures: [arm64]
       Handler: index.eventBridgeMonitor
-      Runtime: nodejs18.x
+      Runtime: nodejs20.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
@@ -50,10 +51,10 @@ Resources:
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
-          DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
-          DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
-          DB_PWD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
-          DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          COCKROACH_DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
+          COCKROACH_DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
+          COCKROACH_DB_PASSWORD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
+          COCKROACH_DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
           SHEET_ID: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-spreadsheet-id}}'
           CLIENT_EMAIL: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-client-email}}'
           PRIVATE_KEY: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-private-key}}'
@@ -71,7 +72,7 @@ Resources:
     Properties:
       Architectures: [arm64]
       Handler: index.eventBridgeHouseKeeping
-      Runtime: nodejs18.x
+      Runtime: nodejs20.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-house-keeping
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
@@ -81,10 +82,10 @@ Resources:
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
-          DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
-          DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
-          DB_PWD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
-          DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          COCKROACH_DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
+          COCKROACH_DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
+          COCKROACH_DB_PASSWORD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
+          COCKROACH_DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
   InvokePermissionHouseKeeping:
     Type: AWS::Lambda::Permission
     DependsOn: [EventBridgeHouseKeeping, LambdaHouseKeeping]
@@ -98,40 +99,43 @@ Resources:
     Properties:
       Architectures: [arm64]
       Handler: index.logger
-      Runtime: nodejs18.x
+      Runtime: nodejs20.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-logger
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
       MemorySize: 128
       Layers: [!Ref LambdaLayer]
+      VpcConfig:
+        SecurityGroupIds: 
+          - sg-00b9879bcad3e4697
+        SubnetIds: 
+          - subnet-0608d15aefe1735ec
+          - subnet-0deab5ad0e63af50d
+          - subnet-03ac3380f6870bb72
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
-          DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
-          DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
-          DB_PWD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
-          DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          MYSQL_DB_HOST:
+            Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
+          MYSQL_DB_PASSWORD: !Sub '{{resolve:ssm:mysql-${TargetEnvr}-${Project}-pwd}}'
   LambdaLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
       LayerName: !Sub ${Project}-${TargetEnvr}-layer
       CompatibleArchitectures: [arm64]
-      CompatibleRuntimes: [nodejs18.x]
+      CompatibleRuntimes: [nodejs20.x]
       ContentUri: ../../dist
       RetentionPolicy: Delete
   #######################
   ######### SQS #########
   #######################
-  LoggerQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub ${Project}-${TargetEnvr}-logger-queue
   EventSourceMapping:
     Type: AWS::Lambda::EventSourceMapping
-    DependsOn: [LambdaLogger, LoggerQueue]
+    DependsOn: [LambdaLogger]
     Properties:
       FunctionName: !GetAtt LambdaLogger.Arn
-      EventSourceArn: !GetAtt LoggerQueue.Arn
+      EventSourceArn: 
+        Fn::ImportValue: !Sub ${Project}-${TargetEnvr}-logger-queue-arn
       BatchSize: 50
       MaximumBatchingWindowInSeconds: 300
       Enabled: true

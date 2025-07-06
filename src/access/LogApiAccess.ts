@@ -1,14 +1,14 @@
 import { inject, injectable } from 'inversify';
 import { LogApi } from 'src/model/entity/LogApiEntity';
-import { Database } from 'src/util/Database';
+import { MySqlDatabase } from 'src/util/MySqlDatabase';
 
 /**
  * Access class for LogApi model.
  */
 @injectable()
 export class LogApiAccess {
-  @inject(Database)
-  private readonly database!: Database;
+  @inject(MySqlDatabase)
+  private readonly database!: MySqlDatabase;
 
   public async saveMany(data: LogApi[]) {
     const qr = await this.database.getQueryRunner();

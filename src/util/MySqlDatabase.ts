@@ -1,37 +1,31 @@
 import 'reflect-metadata';
-import 'pg';
 import { injectable, multiInject } from 'inversify';
 import { DataSource, QueryRunner } from 'typeorm';
 
-export const dbEntitiesBindingId = Symbol('DbEntities');
+export const mySqlDbEntitiesBindingId = Symbol('MySqlDbEntities');
 /**
- * Database manager class
+ * MySqlDatabase manager class
  */
 @injectable()
-export class Database {
+export class MySqlDatabase {
   private dataSource: DataSource | undefined = undefined;
   private queryRunner: QueryRunner | undefined = undefined;
 
-  @multiInject(dbEntitiesBindingId)
+  @multiInject(mySqlDbEntitiesBindingId)
   private readonly entities!: Function[];
 
   private async getDataSource() {
     if (this.dataSource === undefined)
       this.dataSource = new DataSource({
-        type: 'cockroachdb',
-        host: process.env.DB_HOST,
-        port: 26257,
-        username: process.env.DB_USER,
-        password: process.env.DB_PWD,
-        database: `${process.env.DB_CLUSTER}.${process.env.PROJECT}`,
-        ssl: true,
-        extra: {
-          options: `--cluster=${process.env.DB_CLUSTER}`,
-        },
+        type: 'mysql',
+        host: process.env.MYSQL_DB_HOST,
+        port: 3306,
+        username: process.env.PROJECT,
+        password: process.env.MYSQL_DB_PASSWORD,
+        database: process.env.PROJECT,
         entities: this.entities,
         synchronize: false,
         logging: false,
-        timeTravelQueries: false,
       });
     if (!this.dataSource.isInitialized) await this.dataSource.initialize();
 
