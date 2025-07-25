@@ -105,13 +105,6 @@ Resources:
       CodeUri: ../../lib/src
       MemorySize: 128
       Layers: [!Ref LambdaLayer]
-      VpcConfig:
-        SecurityGroupIds: 
-          - sg-00b9879bcad3e4697
-        SubnetIds: 
-          - subnet-0608d15aefe1735ec
-          - subnet-0deab5ad0e63af50d
-          - subnet-03ac3380f6870bb72
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
