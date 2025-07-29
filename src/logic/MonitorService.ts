@@ -23,15 +23,22 @@ export class MonitorService {
   private readonly googleApiService!: GoogleApiService;
 
   public async monitorAll() {
+    console.log('monitor starts...');
     const monitors = await this.monitorAccess.find();
+    console.log(monitors.length, 'monitors found');
 
     const LIMIT = Number(process.env.SQL_LIMIT);
     if (isNaN(LIMIT)) throw new Error('SQL_LIMIT is not a number');
 
     for (const m of monitors) {
+      console.log(`monitoring ${m.name}...`);
+
       // check do refresh or not
       const currentHour = new Date().getHours();
-      if (currentHour % Number(m.refreshPeriod) !== 0) continue;
+      if (currentHour % Number(m.refreshPeriod) !== 0) {
+        console.log(`skipping ${m.name} as it is not time to refresh`);
+        continue;
+      }
 
       // query
       const startTimestamp = Date.now();
@@ -40,6 +47,7 @@ export class MonitorService {
 
       try {
         while (true) {
+          console.log(`querying ${m.name} with offset ${offset}...`);
           const rows = await this.dbAccess.query(
             `${m.sql} limit ${LIMIT} offset ${offset}`
           );
@@ -49,9 +57,13 @@ export class MonitorService {
         }
         const elapsedTime = Date.now() - startTimestamp;
 
+        console.log(
+          `querying ${m.name} with ${data.length} data completed in ${elapsedTime} ms`
+        );
         if (data.length === 0) continue;
 
         // save
+        console.log(`saving ${data.length} rows to Google Sheet...`);
         const sheet = await this.googleApiService.getSheet(m.name);
         if (m.append === false) await sheet.clear();
         await sheet.setHeaderRow(Object.keys(data[0]));
@@ -64,6 +76,7 @@ export class MonitorService {
         monitorHisEntity.success = true;
         await this.monitorHisAccess.save(monitorHisEntity);
       } catch (e) {
+        console.error(`Error monitoring ${m.name}:`, e);
         const monitorHisEntity = new MonitorHisEntity();
         monitorHisEntity.name = m.name;
         monitorHisEntity.success = false;
