@@ -28,7 +28,7 @@ Resources:
                 - lambda.amazonaws.com
             Action:
               - sts:AssumeRole
-      RoleName: !Sub ${Project}-${TargetEnvr}-lambda-execution-role-2
+      RoleName: !Sub ${Project}-${TargetEnvr}-lambda-execution-role
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AWSLambda_FullAccess
