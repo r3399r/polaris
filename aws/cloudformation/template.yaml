@@ -86,6 +86,9 @@ Resources:
           COCKROACH_DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
           COCKROACH_DB_PASSWORD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
           COCKROACH_DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          MYSQL_DB_HOST:
+            Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
+          MYSQL_DB_PASSWORD: !Sub '{{resolve:ssm:mysql-${TargetEnvr}-${Project}-pwd}}'
   InvokePermissionHouseKeeping:
     Type: AWS::Lambda::Permission
     DependsOn: [EventBridgeHouseKeeping, LambdaHouseKeeping]

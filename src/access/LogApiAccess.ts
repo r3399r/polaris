@@ -1,5 +1,5 @@
 import { inject, injectable } from 'inversify';
-import { LogApi } from 'src/model/entity/LogApiEntity';
+import { LogApi, LogApiEntity } from 'src/model/entity/LogApiEntity';
 import { MySqlDatabase } from 'src/util/MySqlDatabase';
 
 /**
@@ -14,5 +14,11 @@ export class LogApiAccess {
     const qr = await this.database.getQueryRunner();
 
     return await qr.manager.save(data);
+  }
+
+  public async createQueryBuilder() {
+    const qr = await this.database.getQueryRunner();
+
+    return qr.manager.createQueryBuilder(LogApiEntity.name, 'log_api');
   }
 }
