@@ -37,10 +37,13 @@ export async function logger(event: QueueEvent, _context: any) {
   console.log(event);
   const db = bindings.get(MySqlDbAccess);
   const service = bindings.get(LoggerService);
+  await db.startTransaction();
   try {
     await service.saveApiLog(event);
+    await db.commitTransaction();
   } catch (e) {
     console.error(e);
+    await db.rollbackTransaction();
   } finally {
     await db.cleanup();
   }
