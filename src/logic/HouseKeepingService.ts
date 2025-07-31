@@ -1,5 +1,6 @@
 import { inject, injectable } from 'inversify';
 import { CockroachDbAccess } from 'src/access/CockroachDbAccess';
+import { IpAccess } from 'src/access/IpAccess';
 import { LogApiAccess } from 'src/access/LogApiAccess';
 
 /**
@@ -11,6 +12,8 @@ export class HouseKeepingService {
   private readonly cockroachDbAccess!: CockroachDbAccess;
   @inject(LogApiAccess)
   private readonly logApiAccess!: LogApiAccess;
+  @inject(IpAccess)
+  private readonly ipAccess!: IpAccess;
 
   public async houseKeep() {
     // clean cockroach db
@@ -22,10 +25,17 @@ export class HouseKeepingService {
     );
 
     // clean log of api
-    const qb = await this.logApiAccess.createQueryBuilder();
-    await qb
+    const qb1 = await this.logApiAccess.createQueryBuilder();
+    await qb1
       .delete()
-      .where('date_requested < DATE_SUB(NOW(), INTERVAL 3 MONTH)')
+      .where('date_created < DATE_SUB(NOW(), INTERVAL 3 MONTH)')
+      .execute();
+
+    // clean ip
+    const qb2 = await this.ipAccess.createQueryBuilder();
+    await qb2
+      .delete()
+      .where('date_created < DATE_SUB(NOW(), INTERVAL 3 MONTH)')
       .execute();
   }
 }
