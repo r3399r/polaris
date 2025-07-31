@@ -22,14 +22,16 @@ export async function eventBridgeHouseKeeping(
   _event: unknown,
   _context: unknown
 ) {
-  const db = bindings.get(CockroachDbAccess);
+  const cockroachDb = bindings.get(CockroachDbAccess);
+  const mysqlDb = bindings.get(MySqlDbAccess);
   const service = bindings.get(HouseKeepingService);
   try {
     await service.houseKeep();
   } catch (e) {
     console.log(e);
   } finally {
-    await db.cleanup();
+    await cockroachDb.cleanup();
+    await mysqlDb.cleanup();
   }
 }
 
