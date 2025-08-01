@@ -27,31 +27,34 @@ export class LoggerService {
     return result.data;
   }
 
-  private async ipExists(ip: string) {
+  private async ipNotExistsInDb(ip: string) {
     const ipEntity = await this.ipAccess.findOne({ where: { ip } });
 
-    return !!ipEntity;
+    return !ipEntity;
   }
 
   public async saveApiLog(event: QueueEvent) {
     const ipEntities: IpEntity[] = [];
     const logApiEntities: LogApiEntity[] = [];
+    const ipSet = new Set<string>();
 
     for (const record of event.Records) {
       const data = JSON.parse(record.body) as LoggerInput;
 
-      const ipExists = data.ip ? await this.ipExists(data.ip) : false;
-      if (data.ip && !ipExists) {
-        const ipInfo = await this.getIpInfo(data.ip);
-        const ipEntity = new IpEntity();
-        ipEntity.ip = data.ip;
-        ipEntity.continent = ipInfo.continent;
-        ipEntity.country = ipInfo.country;
-        ipEntity.region = ipInfo.regionName;
-        ipEntity.city = ipInfo.city;
-        ipEntity.mobile = ipInfo.mobile;
+      if (data.ip) {
+        if (!ipSet.has(data.ip) && await this.ipNotExistsInDb(data.ip)) {
+          const ipInfo = await this.getIpInfo(data.ip);
+          const ipEntity = new IpEntity();
+          ipEntity.ip = data.ip;
+          ipEntity.continent = ipInfo.continent;
+          ipEntity.country = ipInfo.country;
+          ipEntity.region = ipInfo.regionName;
+          ipEntity.city = ipInfo.city;
+          ipEntity.mobile = ipInfo.mobile;
 
-        ipEntities.push(ipEntity);
+          ipEntities.push(ipEntity);
+        }
+        ipSet.add(data.ip);
       }
 
       const logApiEntity = new LogApiEntity();
