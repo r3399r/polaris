@@ -41,20 +41,24 @@ export class LoggerService {
     for (const record of event.Records) {
       const data = JSON.parse(record.body) as LoggerInput;
 
-      if (data.ip) {
-        if (!ipSet.has(data.ip) && await this.ipNotExistsInDb(data.ip)) {
-          const ipInfo = await this.getIpInfo(data.ip);
-          const ipEntity = new IpEntity();
-          ipEntity.ip = data.ip;
-          ipEntity.continent = ipInfo.continent;
-          ipEntity.country = ipInfo.country;
-          ipEntity.region = ipInfo.regionName;
-          ipEntity.city = ipInfo.city;
-          ipEntity.mobile = ipInfo.mobile;
+      try {
+        if (data.ip) {
+          if (!ipSet.has(data.ip) && (await this.ipNotExistsInDb(data.ip))) {
+            const ipInfo = await this.getIpInfo(data.ip);
+            const ipEntity = new IpEntity();
+            ipEntity.ip = data.ip;
+            ipEntity.continent = ipInfo.continent;
+            ipEntity.country = ipInfo.country;
+            ipEntity.region = ipInfo.regionName;
+            ipEntity.city = ipInfo.city;
+            ipEntity.mobile = ipInfo.mobile;
 
-          ipEntities.push(ipEntity);
+            ipEntities.push(ipEntity);
+          }
+          ipSet.add(data.ip);
         }
-        ipSet.add(data.ip);
+      } catch (e) {
+        console.error(`Failed to fetch IP info for ${data.ip}:`, e);
       }
 
       const logApiEntity = new LogApiEntity();
