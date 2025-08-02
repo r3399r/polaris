@@ -22,10 +22,10 @@ export class IpAccess {
 
     return await qr.manager.findOne<Ip>(IpEntity.name, { ...options });
   }
-  
-    public async createQueryBuilder() {
-      const qr = await this.database.getQueryRunner();
-  
-      return qr.manager.createQueryBuilder(IpEntity.name, 'ip');
-    }
+
+  public async createQueryBuilder() {
+    const qr = await this.database.getQueryRunner();
+
+    return qr.manager.createQueryBuilder(IpEntity.name, 'ip');
+  }
 }
