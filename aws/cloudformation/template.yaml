@@ -134,6 +134,8 @@ Resources:
         Fn::ImportValue: !Sub ${Project}-${TargetEnvr}-logger-queue-arn
       BatchSize: 50
       MaximumBatchingWindowInSeconds: 300
+      ScalingConfig:
+        MaximumConcurrency: 2
       Enabled: true
   #######################
   ##### EventBridge #####
