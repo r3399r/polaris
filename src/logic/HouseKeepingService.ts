@@ -25,11 +25,28 @@ export class HouseKeepingService {
     );
 
     // clean log of api
+    const logCount = await this.logApiAccess.count();
     const qb1 = await this.logApiAccess.createQueryBuilder();
-    await qb1
-      .delete()
-      .where('date_created < DATE_SUB(NOW(), INTERVAL 3 MONTH)')
-      .execute();
+
+    const LIMIT = 120000;
+    if (logCount > LIMIT) {
+      const cutoffLog = await this.logApiAccess.find({
+        skip: LIMIT,
+        take: 1,
+        order: { dateCreated: 'DESC' },
+      });
+      if (cutoffLog.length > 0)
+        await qb1
+          .delete()
+          .where('date_created < :cutoffDate', {
+            cutoffDate: cutoffLog[0].dateCreated,
+          })
+          .execute();
+    } else
+      await qb1
+        .delete()
+        .where('date_created < DATE_SUB(NOW(), INTERVAL 3 MONTH)')
+        .execute();
 
     // clean ip
     const qb2 = await this.ipAccess.createQueryBuilder();
