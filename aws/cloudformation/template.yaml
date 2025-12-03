@@ -42,7 +42,7 @@ Resources:
     Properties:
       Architectures: [arm64]
       Handler: index.eventBridgeMonitor
-      Runtime: nodejs20.x
+      Runtime: nodejs22.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
@@ -72,7 +72,7 @@ Resources:
     Properties:
       Architectures: [arm64]
       Handler: index.eventBridgeHouseKeeping
-      Runtime: nodejs20.x
+      Runtime: nodejs22.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-house-keeping
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
@@ -102,7 +102,7 @@ Resources:
     Properties:
       Architectures: [arm64]
       Handler: index.logger
-      Runtime: nodejs20.x
+      Runtime: nodejs22.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-logger
       Role: !GetAtt ExecutionRole.Arn
       CodeUri: ../../lib/src
@@ -119,7 +119,7 @@ Resources:
     Properties:
       LayerName: !Sub ${Project}-${TargetEnvr}-layer
       CompatibleArchitectures: [arm64]
-      CompatibleRuntimes: [nodejs20.x]
+      CompatibleRuntimes: [nodejs22.x]
       ContentUri: ../../dist
       RetentionPolicy: Delete
   #######################
