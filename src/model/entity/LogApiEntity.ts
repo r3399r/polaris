@@ -1,7 +1,7 @@
-import { BeforeInsert, Column, Entity, Generated } from 'typeorm';
+import { BeforeInsert, Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 
 export type LogApi = {
-  id: string;
+  id: number;
   project: string;
   resource: string;
   path: string;
@@ -17,9 +17,8 @@ export type LogApi = {
 
 @Entity({ name: 'log_api' })
 export class LogApiEntity implements LogApi {
-  @Column({ primary: true, type: 'varchar', length: 36 })
-  @Generated('uuid')
-  id!: string;
+  @PrimaryGeneratedColumn({ type: 'int', unsigned: true })
+  id!: number;
 
   @Column({ type: 'varchar', length: 255 })
   project!: string;

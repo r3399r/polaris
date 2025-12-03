@@ -28,7 +28,7 @@ export class HouseKeepingService {
     const logCount = await this.logApiAccess.count();
     const qb1 = await this.logApiAccess.createQueryBuilder();
 
-    const LIMIT = 120000;
+    const LIMIT = 130000;
     if (logCount > LIMIT) {
       const cutoffLog = await this.logApiAccess.find({
         skip: LIMIT,
