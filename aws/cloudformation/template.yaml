@@ -89,6 +89,7 @@ Resources:
           MYSQL_DB_HOST:
             Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
           MYSQL_DB_PASSWORD: !Sub '{{resolve:ssm:mysql-${TargetEnvr}-${Project}-pwd}}'
+          RESET_SQL_STATS: false
   InvokePermissionHouseKeeping:
     Type: AWS::Lambda::Permission
     DependsOn: [EventBridgeHouseKeeping, LambdaHouseKeeping]

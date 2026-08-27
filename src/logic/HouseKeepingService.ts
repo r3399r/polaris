@@ -17,8 +17,9 @@ export class HouseKeepingService {
 
   public async houseKeep() {
     // clean cockroach db
-    await this.cockroachDbAccess.resetSqlStats();
-
+    if (process.env.RESET_SQL_STATS === 'true') {
+      await this.cockroachDbAccess.resetSqlStats();
+    }
     // clean monitor history
     await this.cockroachDbAccess.query(
       "delete from monitor_his mh where mh.date_created < NOW() - interval '14 day'"
