@@ -4,6 +4,7 @@ import { bindings } from './bindings';
 import { HouseKeepingService } from './logic/HouseKeepingService';
 import { LoggerService } from './logic/LoggerService';
 import { MonitorService } from './logic/MonitorService';
+import { RdsService } from './logic/RdsService';
 import { QueueEvent } from './model/Aws';
 
 export async function eventBridgeMonitor(_event: unknown, _context: unknown) {
@@ -49,4 +50,9 @@ export async function logger(event: QueueEvent, _context: any) {
   } finally {
     await db.cleanup();
   }
+}
+
+export async function eventBridgeStopDb(_event: unknown, _context: unknown) {
+  const service = bindings.get(RdsService);
+  await service.stopDb();
 }
