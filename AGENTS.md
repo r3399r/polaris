@@ -5,11 +5,18 @@ Guidance for AI coding agents working in this repository.
 ## What this project is
 
 `polaris` is the back-office/observability service of the **celestialstudio** stack.
-It is a set of AWS Lambda functions (TypeScript, CommonJS, Node 24, arm64) deployed with
-AWS SAM/CloudFormation. There is no HTTP API — every entry point is triggered by
-EventBridge or SQS.
+It holds two deployables in one repo:
 
-Three handlers, all exported from [src/index.ts](src/index.ts):
+- **`backend/`** — AWS Lambda functions (TypeScript, CommonJS, Node 24, arm64) deployed with
+  AWS SAM/CloudFormation. There is no HTTP API — every entry point is triggered by
+  EventBridge or SQS.
+- **`webapp/`** — a Next.js static export (`output: 'export'`) served out of S3 through a
+  CloudFront distribution at `polaris.celestialstudio.net`. It has **no backend of its own
+  yet**: there is deliberately no API Gateway, so the page is static and calls nothing. When
+  an api is added it becomes a second origin on that same distribution with an `/api/*`
+  behavior, which keeps the browser's calls same-origin and means no CORS anywhere.
+
+Four handlers, all exported from [backend/src/index.ts](backend/src/index.ts):
 
 | Export | Trigger | Job |
 | --- | --- | --- |
@@ -24,24 +31,32 @@ Two databases are involved: **CockroachDB** (`monitor`, `monitor_his`) and
 ## Layout
 
 ```
-src/index.ts          lambda handlers — resolve from container, try/catch/finally, always clean up
-src/bindings.ts        inversify container; every new class must be bound here
-src/logic/*Service.ts  business logic
-src/access/*Access.ts  one per table (+ CockroachDbAccess / MySqlDbAccess for raw SQL & transactions,
-                       RdsAccess for the AWS RDS control plane)
-src/util/*Database.ts  DataSource/QueryRunner lifecycle per engine
-src/model/             plain types; src/model/entity/ holds TypeORM entities
-db/*.sql               DDL, applied by hand (synchronize: false — no TypeORM migrations)
-db/migration/          standalone one-off data-migration script, its own package.json
-aws/cloudformation/template.yaml  all infrastructure
+package.json               root; ONLY forwards scripts into backend/ (see the workspaces gotcha)
+deploy.sh                  backend stack first, then the webapp export to S3
+backend/src/index.ts       lambda handlers — resolve from container, try/catch/finally, clean up
+backend/src/bindings.ts    inversify container; every new class must be bound here
+backend/src/logic/*Service.ts  business logic
+backend/src/access/*Access.ts  one per table (+ CockroachDbAccess / MySqlDbAccess for raw SQL
+                           & transactions, RdsAccess for the AWS RDS control plane)
+backend/src/util/*Database.ts  DataSource/QueryRunner lifecycle per engine
+backend/src/model/         plain types; model/entity/ holds TypeORM entities
+backend/package.json       the deployed version number lives here, as it always has
+backend/aws/cloudformation/template.yaml   ALL infrastructure, including the webapp's
+                           S3 bucket, CloudFront distribution and Route53 record
+webapp/app/                Next.js app router; page.tsx is the whole ui today
+webapp/next.config.ts      output:'export' in production only, trailingSlash:true
+db/*.sql                   DDL, applied by hand (synchronize: false — no TypeORM migrations)
+db/migration/              standalone one-off data-migration script, its own package.json
 ```
 
 ## Conventions
 
+### Backend
+
 - **DI everywhere.** Classes are `@injectable()` with property injection
   (`@inject(Foo) private readonly foo!: Foo;`) — never constructor injection, never `new`
-  a service. Register the class in [src/bindings.ts](src/bindings.ts) or `bindings.get()`
-  will throw at runtime. Entities are registered with
+  a service. Register the class in [backend/src/bindings.ts](backend/src/bindings.ts) or
+  `bindings.get()` will throw at runtime. Entities are registered with
   `.toFunction(XEntity)` against `cockroachDbEntitiesBindingId` / `mySqlDbEntitiesBindingId`.
 - **Layering is strict:** handler → service → access → database util. Services must not
   touch a `QueryRunner` directly; access classes must not hold business rules.
@@ -62,7 +77,18 @@ aws/cloudformation/template.yaml  all infrastructure
 - Lambdas are short-lived: a handler must `await db.cleanup()` in a `finally`, and the
   `logger` handler wraps its work in an explicit transaction.
 
+### Webapp
+
+- Next.js app router, Tailwind 4, TypeScript strict. Nothing else: no component library, no
+  chart library, no auth sdk. `castor/webapp` is the reference for how to add any of those
+  when the time comes, but it is not a template to copy wholesale.
+- Every route must be emitted as a directory with an `index.html` in it
+  (`trailingSlash: true`), because the S3 website endpoint resolves a directory to its
+  `IndexDocument`. Dropping that setting produces urls that 404 through CloudFront.
+
 ## Commands
+
+From the repo root — these only forward into `backend/`:
 
 ```sh
 npm run lint          # eslint + prettier check (parallel)
@@ -71,33 +97,82 @@ npm test              # jest
 npm run test:coverage
 npm run pre:dev       # fix + test:coverage — run this before committing
 npm run pre:deploy    # clean + build:lambda + build:layer (what deploy.sh runs)
+npm run dev:webapp    # next dev
+npm run build:webapp  # static export into webapp/out
 ```
 
 Notes:
-- `npm run pre:commit` is **broken** — it calls a `build` script that does not exist. Use
-  `npm run pre:dev`, or `npm run lint && npm test && npm run pre:deploy`.
+- `backend`'s `pre:commit` script is **broken** — it calls a `build` script that does not
+  exist. Use `npm run pre:dev`, or `npm run lint && npm test && npm run pre:deploy`.
 - `tsc` is invoked as `tspc` (ts-patch) so that `typescript-transform-paths` rewrites the
   `src/*` aliases in the emitted `lib/` output. Plain `tsc` produces unloadable Lambda code.
 - `strict`, `noUnusedLocals`, `noUnusedParameters` and `noEmitOnError` are on; prefix
   deliberately unused params with `_`.
-- **There are currently no test files.** `jest` matches `src/**/*.test.ts`, so new tests go
-  next to the code they cover. If you add behaviour, add the test — mock the access layer,
-  never hit a real database.
+- **There are currently no test files**, so `npm test` exits 1 with "0 matches" — that is
+  the expected state, not a break. `jest` matches `backend/src/**/*.test.ts`, so new tests
+  go next to the code they cover, and `exclude` in
+  [backend/tsconfig.json](backend/tsconfig.json) keeps them out of the Lambda bundle —
+  without it `tspc` emits them into `lib/` and ships them. If you add behaviour, add the
+  test: build a fresh inversify `Container` and bind a mock over the access class, never hit
+  a real database or a real AWS api.
+- Neither `deploy.sh` nor the GitHub workflows run lint or tests, so neither gates a
+  release.
 
 ## Deploy & branches
 
-- `deploy.sh <env>` packages and deploys stack `polaris-<env>-stack` to region `ap-east-2`.
+- `deploy.sh <env>` deploys stack `polaris-<env>-stack` to region `ap-east-2`, then syncs
+  `webapp/out` to `s3://polaris-<env>-y`. The backend goes first on purpose: a webapp
+  calling a route the deployed backend does not have yet is the less bad failure.
+- The site is `polaris.celestialstudio.net` (prod) and `polaris-test.celestialstudio.net`
+  (test). The certificate is the shared `*.celestialstudio.net` one in **us-east-1** — a
+  CloudFront certificate must live there whatever region the stack is in — and `castor` and
+  `pollux` point at the same ARN.
+- `deploy.sh` runs **no CloudFront invalidation**, and the default behavior is therefore
+  pinned at TTL 0 with a `no-cache` header on upload. Adding a TTL means adding an
+  invalidation with it. The hashed assets under `/_next/static/*` are the ones that could
+  safely be cached long-term; that needs its own behavior plus matching headers in
+  `deploy.sh`, and is not worth it for a single page.
 - GitHub Actions: push to `dev` → `deploy.sh test`; push to `master` → `deploy.sh prod`.
   **Any commit on `dev` or `master` deploys.** Work on a `release-x.y.z` branch and open a
-  PR, following the existing history (`release 1.1.4` bumps `package.json`, then PR into
-  `dev`/`master`).
+  PR, following the existing history (`release 1.1.4` bumps `backend/package.json`, then PR
+  into `dev`/`master`).
 - Default working branch is `dev`; `master` is production.
 - Changing an environment variable, schedule, memory or runtime means editing
-  [aws/cloudformation/template.yaml](aws/cloudformation/template.yaml) — code alone is not enough.
+  [backend/aws/cloudformation/template.yaml](backend/aws/cloudformation/template.yaml) —
+  code alone is not enough.
 - Schema changes are manual: add the DDL to `db/*.sql` **and** apply it to the real database;
   nothing runs it for you.
 
 ## Gotchas
+
+### Repo layout and local builds
+
+- **This is NOT an npm workspace.** `backend`'s `build:layer` ships the Lambda layer by
+  copying `backend/node_modules` wholesale; workspace hoisting would move those packages up
+  to the root and the layer would deploy nearly empty — a stack that reports success and
+  then throws `Cannot find module` on every invocation. `backend/` and `webapp/` each
+  install their own tree, and the root `package.json` only forwards scripts. (Note this is
+  not what `castor`'s layer is for: that one holds `chromium-arm64.zip` and nothing else,
+  because castor bundles its app code with esbuild. Getting rid of polaris's layer means
+  switching to bundling too, which is its own change.)
+- **`npm i` in `backend/` fails on Windows.** `pg-native` pulls in `libpq`, a native module
+  needing node-gyp and a Visual Studio install. Use `npm ci --ignore-scripts` locally;
+  nothing in the build or the tests needs the compiled binding. CI (ubuntu) is unaffected.
+  Do not delete `backend/node_modules` on a machine without Visual Studio — it cannot be
+  reinstalled the normal way.
+- **`npm run pre:deploy` also fails on Windows**, for an unrelated reason: `build:layer`'s
+  `cp -R node_modules dist/nodejs` cannot recreate the dangling `.bin` symlinks npm leaves
+  behind. The layer is only ever built in CI, so this is not worth fixing.
+- **`next build` fails if invoked from a lowercase drive letter** (`/c/Users/...`, as Git
+  Bash reports it). React gets resolved twice, under `c:\` and `C:\`, and prerendering dies
+  with `Cannot read properties of null (reading 'useContext')`. Build from PowerShell, or
+  any shell whose cwd is `C:\Users\...`.
+- **`.gitignore` anchors the build outputs to `backend/` on purpose.** A bare `lib` or
+  `dist` pattern also matches anything of that name under `webapp/`, which would be source,
+  and silently drops it from every commit — it still builds locally and then fails in CI.
+  `db/migration` has its own `.gitignore` for its `dist`/`node_modules`/`.env`.
+
+### Application behaviour
 
 - `MonitorService` appends `limit/offset` to operator-authored SQL from the `monitor` table
   and paginates until an empty page; `SQL_LIMIT` must be set and numeric or it throws.

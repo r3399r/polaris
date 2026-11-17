@@ -12,9 +12,15 @@ Parameters:
   TargetEnvr:
     Type: String
     Description: The target environment for API Gateway deployment.
+  SubDomain:
+    Type: String
+  Domain:
+    Type: String
 Conditions:
   # cost saving resources only exist in the test environment
   IsTestEnvr: !Equals [!Ref TargetEnvr, test]
+  # prod owns the bare subdomain, every other environment is suffixed
+  IsProd: !Equals [!Ref TargetEnvr, prod]
 Resources:
   ##########################################
   ##### AWS IAM Role to execute lambda #####
@@ -262,3 +268,95 @@ Resources:
         RoleArn: !GetAtt StopDbSchedulerRole.Arn
         RetryPolicy:
           MaximumRetryAttempts: 2
+
+  #############################################
+  ##### Webapp hosting: S3 + CloudFront    #####
+  #############################################
+  # Serves webapp/out, the Next.js static export. There is deliberately no api
+  # origin here yet -- when one is added it becomes a second origin on this same
+  # distribution with an /api/* behavior, which is what keeps the browser's
+  # calls same-origin and means no CORS anywhere.
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${Project}-${TargetEnvr}-y
+      WebsiteConfiguration:
+        # A static export has no server to answer an unknown path, and the
+        # client router needs the shell, so 404 serves index.html too.
+        ErrorDocument: index.html
+        IndexDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: [S3Bucket]
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # The CloudFront origin is the S3 *website* endpoint, which does not
+          # support OAC/OAI, so the objects have to be anonymously readable.
+          - Sid: PublicReadForWebsiteOrigin
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub ${S3Bucket.Arn}/*
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: [S3Bucket]
+    Properties:
+      DistributionConfig:
+        Aliases: [!If [IsProd, !Sub '${SubDomain}.${Domain}', !Sub '${SubDomain}-${TargetEnvr}.${Domain}']]
+        Origins:
+          - DomainName: !Select [1, !Split ["//", !GetAtt S3Bucket.WebsiteURL]]
+            Id: S3-hosted-website-ID
+            CustomOriginConfig:
+              # an S3 website endpoint only speaks http, never https
+              OriginProtocolPolicy: http-only
+        Enabled: 'true'
+        HttpVersion: http2
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          AllowedMethods: ["GET", "HEAD", "OPTIONS"]
+          TargetOriginId: S3-hosted-website-ID
+          Compress: true
+          ForwardedValues:
+            QueryString: 'false'
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+          # Uncached, and it has to stay that way while deploy.sh runs no
+          # invalidation: the export's paths do not change between releases, so
+          # any TTL here keeps serving the previous release. The hashed assets
+          # under /_next/static/* are the ones that could safely be cached; that
+          # needs its own behavior plus the matching headers on upload, and is
+          # not worth it for a single page.
+          DefaultTTL: 0
+          MinTTL: 0
+          MaxTTL: 0
+        PriceClass: PriceClass_200
+        ViewerCertificate:
+          # The shared *.celestialstudio.net certificate, also used by castor
+          # and pollux. A CloudFront certificate must live in us-east-1 whatever
+          # region the stack is in.
+          AcmCertificateArn: arn:aws:acm:us-east-1:278497686406:certificate/8914c993-68c7-4e06-b741-def8fc0270ba
+          MinimumProtocolVersion: TLSv1
+          SslSupportMethod: sni-only
+  Route53RecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub '${Domain}.'
+      Name: !If [IsProd, !Sub '${SubDomain}.${Domain}.', !Sub '${SubDomain}-${TargetEnvr}.${Domain}.']
+      Type: A
+      AliasTarget:
+        # fixed magic id for a CloudFront alias, identical in every region
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+Outputs:
+  SiteUrl:
+    Description: The webapp
+    Value: !If [IsProd, !Sub 'https://${SubDomain}.${Domain}', !Sub 'https://${SubDomain}-${TargetEnvr}.${Domain}']
