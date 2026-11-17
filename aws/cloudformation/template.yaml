@@ -69,40 +69,6 @@ Resources:
               - Effect: Allow
                 Action: rds:StopDBInstance
                 Resource: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:celestial-studio-mysql-${TargetEnvr}
-  ###############################################
-  ##### AWS IAM Role for the db-switch ui   #####
-  ##### scoped to the single test instance  #####
-  ###############################################
-  DbSwitchExecutionRole:
-    Type: AWS::IAM::Role
-    Condition: IsTestEnvr
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      RoleName: !Sub ${Project}-${TargetEnvr}-db-switch-role
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: !Sub ${Project}-${TargetEnvr}-db-switch-policy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              # rds:DescribeDBInstances does not support resource-level permissions
-              - Effect: Allow
-                Action: rds:DescribeDBInstances
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - rds:StartDBInstance
-                  - rds:StopDBInstance
-                Resource: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:celestial-studio-mysql-${TargetEnvr}
   #################################################
   ##### AWS IAM Role for the stop-db schedule #####
   #################################################
@@ -225,28 +191,6 @@ Resources:
         Variables:
           MYSQL_DB_HOST:
             Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
-  # Manual start/stop UI. AuthType NONE because a browser cannot sign SigV4;
-  # the whole url path is a secret held in SSM and checked in the handler, so an
-  # unauthenticated request never reaches the RDS api.
-  LambdaDbSwitch:
-    Type: AWS::Serverless::Function
-    Condition: IsTestEnvr
-    Properties:
-      Architectures: [arm64]
-      Handler: index.dbSwitch
-      Runtime: nodejs24.x
-      FunctionName: !Sub ${Project}-${TargetEnvr}-db-switch
-      Role: !GetAtt DbSwitchExecutionRole.Arn
-      CodeUri: ../../lib/src
-      MemorySize: 128
-      Layers: [!Ref LambdaLayer]
-      FunctionUrlConfig:
-        AuthType: NONE
-      Environment:
-        Variables:
-          MYSQL_DB_HOST:
-            Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
-          UI_SECRET: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-ui-secret}}'
   LambdaLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
@@ -318,8 +262,3 @@ Resources:
         RoleArn: !GetAtt StopDbSchedulerRole.Arn
         RetryPolicy:
           MaximumRetryAttempts: 2
-Outputs:
-  DbSwitchBaseUrl:
-    Condition: IsTestEnvr
-    Description: Append the ui secret as the path to get the working url
-    Value: !GetAtt LambdaDbSwitchUrl.FunctionUrl

@@ -1,7 +1,6 @@
 import {
   DescribeDBInstancesCommand,
   RDSClient,
-  StartDBInstanceCommand,
   StopDBInstanceCommand,
 } from '@aws-sdk/client-rds';
 import { inject, injectable } from 'inversify';
@@ -20,12 +19,6 @@ export class RdsAccess {
     );
 
     return res.DBInstances?.[0];
-  }
-
-  public async startDbInstance(identifier: string) {
-    await this.client.send(
-      new StartDBInstanceCommand({ DBInstanceIdentifier: identifier })
-    );
   }
 
   public async stopDbInstance(identifier: string) {
