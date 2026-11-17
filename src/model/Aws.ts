@@ -16,3 +16,20 @@ export type QueueEvent = {
     awsRegion: string;
   }[];
 };
+
+export type FunctionUrlEvent = {
+  rawPath: string;
+  requestContext: {
+    http: {
+      method: string;
+    };
+  };
+  body?: string;
+  isBase64Encoded?: boolean;
+};
+
+export type FunctionUrlResult = {
+  statusCode: number;
+  headers?: Record<string, string>;
+  body: string;
+};

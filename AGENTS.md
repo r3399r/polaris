@@ -6,10 +6,10 @@ Guidance for AI coding agents working in this repository.
 
 `polaris` is the back-office/observability service of the **celestialstudio** stack.
 It is a set of AWS Lambda functions (TypeScript, CommonJS, Node 24, arm64) deployed with
-AWS SAM/CloudFormation. There is no HTTP API — every entry point is triggered by
-EventBridge or SQS.
+AWS SAM/CloudFormation. There is no API Gateway: entry points are EventBridge, SQS, and one
+Lambda Function URL (`db-switch`, test env only).
 
-Three handlers, all exported from [src/index.ts](src/index.ts):
+Handlers, all exported from [src/index.ts](src/index.ts):
 
 | Export | Trigger | Job |
 | --- | --- | --- |
@@ -17,6 +17,7 @@ Three handlers, all exported from [src/index.ts](src/index.ts):
 | `eventBridgeHouseKeeping` | cron `31 19 * * ? *` | Prunes `monitor_his` (14 days), `log_api` (3 months or 130k rows) and `ip` (3 months); optionally resets CockroachDB SQL stats. |
 | `logger` | SQS (`${Project}-${TargetEnvr}-logger-queue`, batch 50) | Consumes API-log messages from the other services, enriches the caller IP via ip-api.com, writes `log_api` + `ip`. |
 | `eventBridgeStopDb` | 05:00 & 19:00 Asia/Taipei, daily, **test env only** | Cost saving: stops the test MySQL RDS instance whenever it is found running. |
+| `dbSwitch` | Lambda Function URL, **test env only** | Hand-operated page to start/stop the test instance from a phone. `GET` serves the page, `POST {action: status\|start\|stop}` acts. |
 
 Two databases are involved: **CockroachDB** (`monitor`, `monitor_his`) and
 **MySQL** (`log_api`, `ip`, shared `celestial-studio-${env}` instance).
@@ -30,6 +31,8 @@ src/logic/*Service.ts  business logic
 src/access/*Access.ts  one per table (+ CockroachDbAccess / MySqlDbAccess for raw SQL & transactions,
                        RdsAccess for the AWS RDS control plane)
 src/util/*Database.ts  DataSource/QueryRunner lifecycle per engine
+src/util/DbSwitchPage.ts  the db-switch page, a constant HTML string
+src/util/Secret.ts        constant-time secret comparison
 src/model/             plain types; src/model/entity/ holds TypeORM entities
 db/*.sql               DDL, applied by hand (synchronize: false — no TypeORM migrations)
 db/migration/          standalone one-off data-migration script, its own package.json
@@ -80,9 +83,11 @@ Notes:
   `src/*` aliases in the emitted `lib/` output. Plain `tsc` produces unloadable Lambda code.
 - `strict`, `noUnusedLocals`, `noUnusedParameters` and `noEmitOnError` are on; prefix
   deliberately unused params with `_`.
-- **There are currently no test files.** `jest` matches `src/**/*.test.ts`, so new tests go
-  next to the code they cover. If you add behaviour, add the test — mock the access layer,
-  never hit a real database.
+- Tests live next to the code they cover (`jest` matches `src/**/*.test.ts`) and are kept out
+  of the Lambda bundle by `exclude` in [tsconfig.json](tsconfig.json) — without it `tspc`
+  emits them into `lib/` and ships them. If you add behaviour, add the test: build a fresh
+  inversify `Container` and bind a mock over the access class, never hit a real database or
+  a real AWS api. Coverage is thin — only `RdsService` and `Secret` are covered so far.
 
 ## Deploy & branches
 
@@ -128,3 +133,15 @@ Notes:
   `FlexibleTimeWindow.Mode` must stay quoted as `'OFF'` — bare `OFF` is boolean `false` in YAML.
 - AWS force-starts a stopped RDS instance after 7 days; the twice-daily check caps the waste
   from that at about half a day.
+- **`db-switch` will not deploy until the SSM parameter `${Project}-${TargetEnvr}-ui-secret`
+  exists** (plain `String`, like the other secrets this template resolves). A
+  `{{resolve:ssm:...}}` for a missing parameter fails the whole stack update.
+- `db-switch` uses `FunctionUrlConfig: AuthType: NONE` because a browser cannot sign SigV4.
+  The entire url path *is* the secret: the handler compares it with
+  `secretMatches` (constant time) and returns a flat `404` for anything else, including a
+  wrong method, so a scan never reaches the RDS api and cannot tell the endpoint exists. The
+  secret must therefore never be templated into the page — the page is a constant and the
+  browser posts back to `location.pathname`.
+- `RdsService.nextScheduledStop` hardcodes the stop hours as **UTC** (11:00 and 21:00 = 19:00
+  and 05:00 Asia/Taipei) and must be kept in sync by hand with `ScheduleStopDb` in the
+  template. It only displays a hint on the page, so a drift is cosmetic, not functional.
