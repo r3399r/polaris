@@ -1,68 +1,31 @@
-import 'reflect-metadata';
-import { Container } from 'inversify';
-import { CockroachDbAccess } from 'src/access/CockroachDbAccess';
-import { IpAccess } from 'src/access/IpAccess';
-import { LogApiAccess } from 'src/access/LogApiAccess';
-import { HouseKeepingService } from 'src/logic/HouseKeepingService';
+import * as cockroach from 'src/db/queries/cockroach';
+import { CockroachDb } from 'src/db/queries/cockroach';
+import * as mysql from 'src/db/queries/mysql';
+import { MysqlDb } from 'src/db/queries/mysql';
+import { houseKeep } from 'src/logic/HouseKeepingService';
 
-const THREE_MONTHS = 'date_created < DATE_SUB(NOW(), INTERVAL 3 MONTH)';
+jest.mock('src/db/queries/cockroach');
+jest.mock('src/db/queries/mysql');
+const c = jest.mocked(cockroach);
+const m = jest.mocked(mysql);
 
-/** A chainable stand-in for TypeORM's delete query builder. */
-type Qb = {
-  delete: jest.Mock;
-  where: jest.Mock;
-  execute: jest.Mock;
-};
+// The queries are mocked, so neither handle is ever dereferenced.
+const cockroachDb = {} as CockroachDb;
+const mysqlDb = {} as MysqlDb;
 
-// The chaining is wired up after the object exists; returning `qb` from inside
-// its own initializer makes its type circular and tsc refuses to infer it.
-const makeQb = (): Qb => {
-  const qb: Qb = {
-    delete: jest.fn(),
-    where: jest.fn(),
-    execute: jest.fn().mockResolvedValue(undefined),
-  };
-  qb.delete.mockReturnValue(qb);
-  qb.where.mockReturnValue(qb);
-
-  return qb;
-};
+const run = () => houseKeep(cockroachDb, mysqlDb);
 
 describe('HouseKeepingService', () => {
-  let container: Container;
-  let service: HouseKeepingService;
-  let logApiQb: Qb;
-  let ipQb: Qb;
-  let cockroachDbAccess: { query: jest.Mock; resetSqlStats: jest.Mock };
-  let logApiAccess: {
-    count: jest.Mock;
-    find: jest.Mock;
-    createQueryBuilder: jest.Mock;
-  };
-  let ipAccess: { createQueryBuilder: jest.Mock };
-
   beforeEach(() => {
     delete process.env.RESET_SQL_STATS;
-    logApiQb = makeQb();
-    ipQb = makeQb();
 
-    cockroachDbAccess = {
-      query: jest.fn().mockResolvedValue(undefined),
-      resetSqlStats: jest.fn().mockResolvedValue(undefined),
-    };
-    logApiAccess = {
-      count: jest.fn().mockResolvedValue(0),
-      find: jest.fn().mockResolvedValue([]),
-      createQueryBuilder: jest.fn().mockResolvedValue(logApiQb),
-    };
-    ipAccess = { createQueryBuilder: jest.fn().mockResolvedValue(ipQb) };
-
-    container = new Container();
-    container.bind<any>(CockroachDbAccess).toConstantValue(cockroachDbAccess);
-    container.bind<any>(LogApiAccess).toConstantValue(logApiAccess);
-    container.bind<any>(IpAccess).toConstantValue(ipAccess);
-    container.bind<HouseKeepingService>(HouseKeepingService).toSelf();
-    service = container.get(HouseKeepingService);
+    c.resetSqlStats.mockReset().mockResolvedValue(undefined);
+    c.deleteOldMonitorHis.mockReset().mockResolvedValue(undefined);
+    m.countLogApi.mockReset().mockResolvedValue(0);
+    m.findLogApiCutoff.mockReset().mockResolvedValue(undefined);
+    m.deleteLogApiBefore.mockReset().mockResolvedValue(undefined);
+    m.deleteLogApiOlderThanThreeMonths.mockReset().mockResolvedValue(undefined);
+    m.deleteIpOlderThanThreeMonths.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -70,85 +33,81 @@ describe('HouseKeepingService', () => {
   describe('cockroach sql stats', () => {
     it('resets them only when RESET_SQL_STATS is the string true', async () => {
       process.env.RESET_SQL_STATS = 'true';
-      await service.houseKeep();
-      expect(cockroachDbAccess.resetSqlStats).toHaveBeenCalled();
+      await run();
+      expect(c.resetSqlStats).toHaveBeenCalled();
     });
 
     it('leaves them alone when the flag is absent', async () => {
-      await service.houseKeep();
-      expect(cockroachDbAccess.resetSqlStats).not.toHaveBeenCalled();
+      await run();
+      expect(c.resetSqlStats).not.toHaveBeenCalled();
     });
 
     it('leaves them alone when the flag is the string false', async () => {
       process.env.RESET_SQL_STATS = 'false';
-      await service.houseKeep();
-      expect(cockroachDbAccess.resetSqlStats).not.toHaveBeenCalled();
+      await run();
+      expect(c.resetSqlStats).not.toHaveBeenCalled();
     });
   });
 
   describe('monitor_his', () => {
+    // The 14-day interval itself now lives in db/queries/cockroach.ts and is
+    // no longer asserted here; what this pins is that the delete is issued on
+    // every run.
     it('always deletes rows older than 14 days', async () => {
-      await service.houseKeep();
-      expect(cockroachDbAccess.query).toHaveBeenCalledWith(
-        "delete from monitor_his mh where mh.date_created < NOW() - interval '14 day'"
-      );
+      await run();
+      expect(c.deleteOldMonitorHis).toHaveBeenCalledWith(cockroachDb);
     });
   });
 
   describe('log_api', () => {
     it('deletes by age when the table is under the row cap', async () => {
-      logApiAccess.count.mockResolvedValue(130000);
-      await service.houseKeep();
+      m.countLogApi.mockResolvedValue(130000);
+      await run();
 
-      expect(logApiAccess.find).not.toHaveBeenCalled();
-      expect(logApiQb.where).toHaveBeenCalledWith(THREE_MONTHS);
-      expect(logApiQb.execute).toHaveBeenCalled();
+      expect(m.findLogApiCutoff).not.toHaveBeenCalled();
+      expect(m.deleteLogApiOlderThanThreeMonths).toHaveBeenCalledWith(mysqlDb);
+      expect(m.deleteLogApiBefore).not.toHaveBeenCalled();
     });
 
     it('deletes by row count once over the cap', async () => {
-      logApiAccess.count.mockResolvedValue(130001);
-      logApiAccess.find.mockResolvedValue([{ dateCreated: '2026-01-01' }]);
+      const cutoff = new Date('2026-01-01T00:00:00.000Z');
+      m.countLogApi.mockResolvedValue(130001);
+      m.findLogApiCutoff.mockResolvedValue(cutoff);
 
-      await service.houseKeep();
+      await run();
 
-      expect(logApiAccess.find).toHaveBeenCalledWith({
-        skip: 130000,
-        take: 1,
-        order: { dateCreated: 'DESC' },
-      });
-      expect(logApiQb.where).toHaveBeenCalledWith(
-        'date_created < :cutoffDate',
-        { cutoffDate: '2026-01-01' }
-      );
+      expect(m.findLogApiCutoff).toHaveBeenCalledWith(mysqlDb, 130000);
+      expect(m.deleteLogApiBefore).toHaveBeenCalledWith(mysqlDb, cutoff);
+      expect(m.deleteLogApiOlderThanThreeMonths).not.toHaveBeenCalled();
     });
 
     // Current behaviour: over the cap but the cutoff lookup came back empty,
     // so nothing is deleted at all -- not even the three-month sweep, because
     // that lives in the else branch.
     it('deletes nothing when over the cap but no cutoff row is found', async () => {
-      logApiAccess.count.mockResolvedValue(130001);
-      logApiAccess.find.mockResolvedValue([]);
+      m.countLogApi.mockResolvedValue(130001);
+      m.findLogApiCutoff.mockResolvedValue(undefined);
 
-      await service.houseKeep();
+      await run();
 
-      expect(logApiQb.execute).not.toHaveBeenCalled();
+      expect(m.deleteLogApiBefore).not.toHaveBeenCalled();
+      expect(m.deleteLogApiOlderThanThreeMonths).not.toHaveBeenCalled();
     });
   });
 
   describe('ip', () => {
     it('always deletes rows older than three months', async () => {
-      await service.houseKeep();
-      expect(ipQb.where).toHaveBeenCalledWith(THREE_MONTHS);
-      expect(ipQb.execute).toHaveBeenCalled();
+      await run();
+      expect(m.deleteIpOlderThanThreeMonths).toHaveBeenCalledWith(mysqlDb);
     });
 
     it('runs even when the log_api branch deleted nothing', async () => {
-      logApiAccess.count.mockResolvedValue(130001);
-      logApiAccess.find.mockResolvedValue([]);
+      m.countLogApi.mockResolvedValue(130001);
+      m.findLogApiCutoff.mockResolvedValue(undefined);
 
-      await service.houseKeep();
+      await run();
 
-      expect(ipQb.execute).toHaveBeenCalled();
+      expect(m.deleteIpOlderThanThreeMonths).toHaveBeenCalled();
     });
   });
 });

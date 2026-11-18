@@ -1,32 +1,37 @@
-import 'reflect-metadata';
-import { Container } from 'inversify';
-import { CockroachDbAccess } from 'src/access/CockroachDbAccess';
-import { MonitorAccess } from 'src/access/MonitorAccess';
-import { MonitorHisAccess } from 'src/access/MonitorHisAccess';
-import { GoogleApiService } from 'src/logic/GoogleApiService';
-import { MonitorService } from 'src/logic/MonitorService';
-import { Monitor } from 'src/model/entity/MonitorEntity';
+import * as cockroach from 'src/db/queries/cockroach';
+import { CockroachDb } from 'src/db/queries/cockroach';
+import * as googleSheets from 'src/lib/googleSheets';
+import { monitorAll } from 'src/logic/MonitorService';
 
-const monitor = (over: Partial<Monitor> = {}): Monitor => ({
+jest.mock('src/db/queries/cockroach');
+jest.mock('src/lib/googleSheets');
+const q = jest.mocked(cockroach);
+const sheets = jest.mocked(googleSheets);
+
+// The queries are mocked, so the handle itself is never dereferenced.
+const db = {} as CockroachDb;
+
+type MonitorRow = {
+  name: string;
+  sql: string;
+  refreshPeriod: number;
+  append: boolean;
+};
+
+const monitor = (over: Partial<MonitorRow> = {}): MonitorRow => ({
   name: 'daily',
   sql: 'select 1',
-  refreshPeriod: '1',
+  refreshPeriod: 1,
   append: false,
   ...over,
 });
 
 describe('MonitorService', () => {
-  let container: Container;
-  let service: MonitorService;
   let sheet: {
     clear: jest.Mock;
     setHeaderRow: jest.Mock;
     addRows: jest.Mock;
   };
-  let dbAccess: { query: jest.Mock };
-  let monitorAccess: { find: jest.Mock };
-  let monitorHisAccess: { save: jest.Mock };
-  let googleApiService: { getSheet: jest.Mock };
 
   beforeEach(() => {
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -38,18 +43,11 @@ describe('MonitorService', () => {
       setHeaderRow: jest.fn(),
       addRows: jest.fn(),
     };
-    dbAccess = { query: jest.fn().mockResolvedValue([]) };
-    monitorAccess = { find: jest.fn().mockResolvedValue([]) };
-    monitorHisAccess = { save: jest.fn() };
-    googleApiService = { getSheet: jest.fn().mockResolvedValue(sheet) };
 
-    container = new Container();
-    container.bind<any>(CockroachDbAccess).toConstantValue(dbAccess);
-    container.bind<any>(MonitorAccess).toConstantValue(monitorAccess);
-    container.bind<any>(MonitorHisAccess).toConstantValue(monitorHisAccess);
-    container.bind<any>(GoogleApiService).toConstantValue(googleApiService);
-    container.bind<MonitorService>(MonitorService).toSelf();
-    service = container.get(MonitorService);
+    q.findMonitors.mockReset().mockResolvedValue([]);
+    q.runRawQuery.mockReset().mockResolvedValue([]);
+    q.insertMonitorHis.mockReset().mockResolvedValue(undefined);
+    sheets.getSheet.mockReset().mockResolvedValue(sheet as never);
   });
 
   afterEach(() => {
@@ -60,33 +58,33 @@ describe('MonitorService', () => {
   describe('SQL_LIMIT', () => {
     it('throws when unset', async () => {
       delete process.env.SQL_LIMIT;
-      await expect(service.monitorAll()).rejects.toThrow('SQL_LIMIT');
+      await expect(monitorAll(db)).rejects.toThrow('SQL_LIMIT');
     });
 
     it('throws when not a number', async () => {
       process.env.SQL_LIMIT = 'lots';
-      await expect(service.monitorAll()).rejects.toThrow('SQL_LIMIT');
+      await expect(monitorAll(db)).rejects.toThrow('SQL_LIMIT');
     });
 
     it('is checked before any monitor runs', async () => {
       process.env.SQL_LIMIT = 'lots';
-      monitorAccess.find.mockResolvedValue([monitor()]);
-      await expect(service.monitorAll()).rejects.toThrow('SQL_LIMIT');
-      expect(dbAccess.query).not.toHaveBeenCalled();
+      q.findMonitors.mockResolvedValue([monitor()]);
+      await expect(monitorAll(db)).rejects.toThrow('SQL_LIMIT');
+      expect(q.runRawQuery).not.toHaveBeenCalled();
     });
   });
 
   describe('pagination', () => {
     it('appends limit/offset and pages until an empty page', async () => {
-      monitorAccess.find.mockResolvedValue([monitor()]);
-      dbAccess.query
+      q.findMonitors.mockResolvedValue([monitor()]);
+      q.runRawQuery
         .mockResolvedValueOnce([{ a: 1 }, { a: 2 }])
         .mockResolvedValueOnce([{ a: 3 }])
         .mockResolvedValueOnce([]);
 
-      await service.monitorAll();
+      await monitorAll(db);
 
-      expect(dbAccess.query.mock.calls.map((c) => c[0])).toEqual([
+      expect(q.runRawQuery.mock.calls.map((c) => c[1])).toEqual([
         'select 1 limit 2 offset 0',
         'select 1 limit 2 offset 2',
         'select 1 limit 2 offset 4',
@@ -99,121 +97,119 @@ describe('MonitorService', () => {
     });
 
     it('still issues a second query when the first page is full', async () => {
-      monitorAccess.find.mockResolvedValue([monitor()]);
-      dbAccess.query
+      q.findMonitors.mockResolvedValue([monitor()]);
+      q.runRawQuery
         .mockResolvedValueOnce([{ a: 1 }, { a: 2 }])
         .mockResolvedValueOnce([]);
 
-      await service.monitorAll();
+      await monitorAll(db);
 
-      expect(dbAccess.query).toHaveBeenCalledTimes(2);
+      expect(q.runRawQuery).toHaveBeenCalledTimes(2);
     });
   });
 
   describe('writing to the sheet', () => {
     beforeEach(() => {
-      dbAccess.query
+      q.runRawQuery
         .mockResolvedValueOnce([{ a: 1, b: 2 }])
         .mockResolvedValueOnce([]);
     });
 
     it('clears the tab first when append is false', async () => {
-      monitorAccess.find.mockResolvedValue([monitor({ append: false })]);
-      await service.monitorAll();
+      q.findMonitors.mockResolvedValue([monitor({ append: false })]);
+      await monitorAll(db);
       expect(sheet.clear).toHaveBeenCalled();
     });
 
     it('does not clear the tab when append is true', async () => {
-      monitorAccess.find.mockResolvedValue([monitor({ append: true })]);
-      await service.monitorAll();
+      q.findMonitors.mockResolvedValue([monitor({ append: true })]);
+      await monitorAll(db);
       expect(sheet.clear).not.toHaveBeenCalled();
     });
 
     it('takes the header row from the keys of the first row', async () => {
-      monitorAccess.find.mockResolvedValue([monitor()]);
-      await service.monitorAll();
+      q.findMonitors.mockResolvedValue([monitor()]);
+      await monitorAll(db);
       expect(sheet.setHeaderRow).toHaveBeenCalledWith(['a', 'b']);
     });
 
     it('asks for the tab named after the monitor', async () => {
-      monitorAccess.find.mockResolvedValue([monitor({ name: 'orders' })]);
-      await service.monitorAll();
-      expect(googleApiService.getSheet).toHaveBeenCalledWith('orders');
+      q.findMonitors.mockResolvedValue([monitor({ name: 'orders' })]);
+      await monitorAll(db);
+      expect(sheets.getSheet).toHaveBeenCalledWith('orders');
     });
   });
 
   describe('monitor_his', () => {
-    it('records a success with the row count as a string', async () => {
-      monitorAccess.find.mockResolvedValue([monitor({ name: 'orders' })]);
-      dbAccess.query
+    it('records a success with the row count', async () => {
+      q.findMonitors.mockResolvedValue([monitor({ name: 'orders' })]);
+      q.runRawQuery
         .mockResolvedValueOnce([{ a: 1 }, { a: 2 }])
         .mockResolvedValueOnce([]);
 
-      await service.monitorAll();
+      await monitorAll(db);
 
-      expect(monitorHisAccess.save).toHaveBeenCalledTimes(1);
-      const saved = monitorHisAccess.save.mock.calls[0][0];
+      expect(q.insertMonitorHis).toHaveBeenCalledTimes(1);
+      const saved = q.insertMonitorHis.mock.calls[0][1];
       expect(saved.name).toBe('orders');
-      expect(saved.rowCount).toBe('2');
+      expect(saved.rowCount).toBe(2);
       expect(saved.success).toBe(true);
       expect(typeof saved.elapsedTime).toBe('number');
     });
 
     it('records a failure when the query throws', async () => {
-      monitorAccess.find.mockResolvedValue([monitor()]);
-      dbAccess.query.mockRejectedValue(new Error('boom'));
+      q.findMonitors.mockResolvedValue([monitor()]);
+      q.runRawQuery.mockRejectedValue(new Error('boom'));
 
-      await service.monitorAll();
+      await monitorAll(db);
 
-      const saved = monitorHisAccess.save.mock.calls[0][0];
+      const saved = q.insertMonitorHis.mock.calls[0][1];
       expect(saved.success).toBe(false);
       expect(saved.rowCount).toBeNull();
     });
 
     it('records a failure when the sheet throws', async () => {
-      monitorAccess.find.mockResolvedValue([monitor()]);
-      dbAccess.query
-        .mockResolvedValueOnce([{ a: 1 }])
-        .mockResolvedValueOnce([]);
+      q.findMonitors.mockResolvedValue([monitor()]);
+      q.runRawQuery.mockResolvedValueOnce([{ a: 1 }]).mockResolvedValueOnce([]);
       sheet.addRows.mockRejectedValue(new Error('google is down'));
 
-      await service.monitorAll();
+      await monitorAll(db);
 
-      expect(monitorHisAccess.save.mock.calls[0][0].success).toBe(false);
+      expect(q.insertMonitorHis.mock.calls[0][1].success).toBe(false);
     });
 
     // Current behaviour, and a real gap: a monitor whose query returns nothing
     // leaves no trace at all, so "it ran and found nothing" and "it never ran"
     // look identical in monitor_his.
     it('records NOTHING when the query returns no rows', async () => {
-      monitorAccess.find.mockResolvedValue([monitor()]);
-      dbAccess.query.mockResolvedValue([]);
+      q.findMonitors.mockResolvedValue([monitor()]);
+      q.runRawQuery.mockResolvedValue([]);
 
-      await service.monitorAll();
+      await monitorAll(db);
 
-      expect(monitorHisAccess.save).not.toHaveBeenCalled();
-      expect(googleApiService.getSheet).not.toHaveBeenCalled();
+      expect(q.insertMonitorHis).not.toHaveBeenCalled();
+      expect(sheets.getSheet).not.toHaveBeenCalled();
     });
   });
 
   describe('one failure does not stop the rest', () => {
     it('carries on to the next monitor', async () => {
-      monitorAccess.find.mockResolvedValue([
+      q.findMonitors.mockResolvedValue([
         monitor({ name: 'first' }),
         monitor({ name: 'second' }),
       ]);
-      dbAccess.query
+      q.runRawQuery
         .mockRejectedValueOnce(new Error('boom'))
         .mockResolvedValueOnce([{ a: 1 }])
         .mockResolvedValueOnce([]);
 
-      await service.monitorAll();
+      await monitorAll(db);
 
-      expect(monitorHisAccess.save).toHaveBeenCalledTimes(2);
-      expect(monitorHisAccess.save.mock.calls[0][0].name).toBe('first');
-      expect(monitorHisAccess.save.mock.calls[0][0].success).toBe(false);
-      expect(monitorHisAccess.save.mock.calls[1][0].name).toBe('second');
-      expect(monitorHisAccess.save.mock.calls[1][0].success).toBe(true);
+      expect(q.insertMonitorHis).toHaveBeenCalledTimes(2);
+      expect(q.insertMonitorHis.mock.calls[0][1].name).toBe('first');
+      expect(q.insertMonitorHis.mock.calls[0][1].success).toBe(false);
+      expect(q.insertMonitorHis.mock.calls[1][1].name).toBe('second');
+      expect(q.insertMonitorHis.mock.calls[1][1].success).toBe(true);
     });
   });
 
@@ -229,29 +225,29 @@ describe('MonitorService', () => {
   describe('refreshPeriod (currently inert)', () => {
     it('runs every monitor at hour 0, whatever the period', async () => {
       jest.useFakeTimers().setSystemTime(new Date(2026, 0, 1, 0, 0, 0));
-      monitorAccess.find.mockResolvedValue([
-        monitor({ name: 'hourly', refreshPeriod: '1' }),
-        monitor({ name: 'daily', refreshPeriod: '24' }),
-        monitor({ name: 'odd', refreshPeriod: '7' }),
+      q.findMonitors.mockResolvedValue([
+        monitor({ name: 'hourly', refreshPeriod: 1 }),
+        monitor({ name: 'daily', refreshPeriod: 24 }),
+        monitor({ name: 'odd', refreshPeriod: 7 }),
       ]);
-      dbAccess.query.mockResolvedValue([]);
+      q.runRawQuery.mockResolvedValue([]);
 
-      await service.monitorAll();
+      await monitorAll(db);
 
-      expect(dbAccess.query).toHaveBeenCalledTimes(3);
+      expect(q.runRawQuery).toHaveBeenCalledTimes(3);
     });
 
     it('would skip at a non-zero hour, which production never reaches', async () => {
       jest.useFakeTimers().setSystemTime(new Date(2026, 0, 1, 5, 0, 0));
-      monitorAccess.find.mockResolvedValue([
-        monitor({ name: 'skipped', refreshPeriod: '24' }),
-        monitor({ name: 'ran', refreshPeriod: '5' }),
+      q.findMonitors.mockResolvedValue([
+        monitor({ name: 'skipped', refreshPeriod: 24 }),
+        monitor({ name: 'ran', refreshPeriod: 5 }),
       ]);
-      dbAccess.query.mockResolvedValue([]);
+      q.runRawQuery.mockResolvedValue([]);
 
-      await service.monitorAll();
+      await monitorAll(db);
 
-      expect(dbAccess.query).toHaveBeenCalledTimes(1);
+      expect(q.runRawQuery).toHaveBeenCalledTimes(1);
     });
   });
 });

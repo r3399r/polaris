@@ -2,16 +2,13 @@
   "compilerOptions": {
     "baseUrl": ".",
     "declaration": true,
-    "emitDecoratorMetadata": true,
     "esModuleInterop": true,
-    "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
     "importHelpers": true,
     "lib": [
       "dom",
-      "es7",
       "dom.iterable",
-      "scripthost"
+      "es2022"
     ],
     "module": "commonjs",
     "moduleResolution": "node",
@@ -40,9 +37,10 @@
       }
     ],
     "rootDir": ".",
+    "skipLibCheck": true,
     "sourceMap": false,
     "strict": true,
-    "target": "es6"
+    "target": "es2022"
   },
   "include": [
     "src/**/*.ts",

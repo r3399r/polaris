@@ -1,14 +1,17 @@
-import 'reflect-metadata';
 import axios from 'axios';
-import { Container } from 'inversify';
-import { IpAccess } from 'src/access/IpAccess';
-import { LogApiAccess } from 'src/access/LogApiAccess';
-import { LoggerService } from 'src/logic/LoggerService';
+import * as mysql from 'src/db/queries/mysql';
+import { MysqlDb } from 'src/db/queries/mysql';
+import { saveApiLog } from 'src/logic/LoggerService';
 import { QueueEvent } from 'src/model/Aws';
 import { LoggerInput } from 'src/model/Logger';
 
 jest.mock('axios');
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+jest.mock('src/db/queries/mysql');
+const mockedAxios = jest.mocked(axios);
+const m = jest.mocked(mysql);
+
+// The queries are mocked, so the handle is never dereferenced.
+const db = {} as MysqlDb;
 
 const baseInput: LoggerInput = {
   project: 'altarf',
@@ -43,76 +46,61 @@ const event = (overrides: Partial<LoggerInput>[]): QueueEvent =>
   }) as unknown as QueueEvent;
 
 describe('LoggerService', () => {
-  let container: Container;
-  let service: LoggerService;
-  let logApiAccess: { saveMany: jest.Mock };
-  let ipAccess: { findOne: jest.Mock; saveMany: jest.Mock };
-
   beforeEach(() => {
     jest.spyOn(console, 'error').mockImplementation(() => undefined);
-    mockedAxios.get.mockResolvedValue({ data: ipInfo });
+    mockedAxios.get.mockReset().mockResolvedValue({ data: ipInfo });
 
-    logApiAccess = { saveMany: jest.fn() };
-    ipAccess = {
-      findOne: jest.fn().mockResolvedValue(undefined),
-      saveMany: jest.fn(),
-    };
-
-    container = new Container();
-    container.bind<any>(LogApiAccess).toConstantValue(logApiAccess);
-    container.bind<any>(IpAccess).toConstantValue(ipAccess);
-    container.bind<LoggerService>(LoggerService).toSelf();
-    service = container.get(LoggerService);
+    m.findIp.mockReset().mockResolvedValue(undefined);
+    m.insertIps.mockReset().mockResolvedValue(undefined);
+    m.insertLogApi.mockReset().mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
-    jest.restoreAllMocks();
-    mockedAxios.get.mockReset();
-  });
+  afterEach(() => jest.restoreAllMocks());
 
   describe('log rows', () => {
     it('writes one row per record, always', async () => {
-      await service.saveApiLog(event([{}, {}, {}]));
+      await saveApiLog(db, event([{}, {}, {}]));
 
-      expect(logApiAccess.saveMany).toHaveBeenCalledTimes(1);
-      expect(logApiAccess.saveMany.mock.calls[0][0]).toHaveLength(3);
+      expect(m.insertLogApi).toHaveBeenCalledTimes(1);
+      expect(m.insertLogApi.mock.calls[0][1]).toHaveLength(3);
     });
 
-    it('stringifies the numeric columns', async () => {
-      await service.saveApiLog(event([{ statusCode: 404, elapsedTime: 1234 }]));
+    it('passes the numeric columns through as numbers', async () => {
+      await saveApiLog(db, event([{ statusCode: 404, elapsedTime: 1234 }]));
 
-      const row = logApiAccess.saveMany.mock.calls[0][0][0];
-      expect(row.statusCode).toBe('404');
-      expect(row.elapsedTime).toBe('1234');
+      const row = m.insertLogApi.mock.calls[0][1][0];
+      expect(row.statusCode).toBe(404);
+      expect(row.elapsedTime).toBe(1234);
     });
 
     it('carries the rest of the payload through unchanged', async () => {
-      await service.saveApiLog(
+      await saveApiLog(
+        db,
         event([{ project: 'castor', path: '/q/7', body: '{"a":1}' }])
       );
 
-      const row = logApiAccess.saveMany.mock.calls[0][0][0];
+      const row = m.insertLogApi.mock.calls[0][1][0];
       expect(row.project).toBe('castor');
       expect(row.path).toBe('/q/7');
       expect(row.body).toBe('{"a":1}');
-      expect(row.dateRequested).toBe(baseInput.dateRequested);
+      expect(row.dateRequested).toEqual(new Date(baseInput.dateRequested));
     });
 
-    // Current behaviour: an empty batch still reaches the access layer.
-    it('calls saveMany even with no records', async () => {
-      await service.saveApiLog(event([]));
-      expect(logApiAccess.saveMany).toHaveBeenCalledWith([]);
+    // Current behaviour: an empty batch still reaches the query layer.
+    it('calls the insert even with no records', async () => {
+      await saveApiLog(db, event([]));
+      expect(m.insertLogApi).toHaveBeenCalledWith(db, []);
     });
   });
 
   describe('ip enrichment', () => {
     it('looks up and stores an unseen ip', async () => {
-      await service.saveApiLog(event([{ ip: '8.8.8.8' }]));
+      await saveApiLog(db, event([{ ip: '8.8.8.8' }]));
 
       expect(mockedAxios.get).toHaveBeenCalledWith(
         'http://ip-api.com/json/8.8.8.8?fields=1171481'
       );
-      const saved = ipAccess.saveMany.mock.calls[0][0][0];
+      const saved = m.insertIps.mock.calls[0][1][0];
       expect(saved.ip).toBe('8.8.8.8');
       expect(saved.continent).toBe('Asia');
       expect(saved.country).toBe('Taiwan');
@@ -122,35 +110,54 @@ describe('LoggerService', () => {
     });
 
     it('looks an ip up once per batch', async () => {
-      await service.saveApiLog(
+      await saveApiLog(
+        db,
         event([{ ip: '8.8.8.8' }, { ip: '8.8.8.8' }, { ip: '8.8.8.8' }])
       );
 
       expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-      expect(ipAccess.saveMany.mock.calls[0][0]).toHaveLength(1);
+      expect(m.insertIps.mock.calls[0][1]).toHaveLength(1);
     });
 
     it('skips an ip already in the table', async () => {
-      ipAccess.findOne.mockResolvedValue({ ip: '1.1.1.1' });
+      m.findIp.mockResolvedValue({
+        ip: '1.1.1.1',
+        continent: 'Asia',
+        country: 'Taiwan',
+        region: 'Taipei',
+        city: 'Taipei',
+        mobile: false,
+        dateCreated: new Date(),
+      });
 
-      await service.saveApiLog(event([{}]));
+      await saveApiLog(db, event([{}]));
 
       expect(mockedAxios.get).not.toHaveBeenCalled();
-      expect(ipAccess.saveMany).not.toHaveBeenCalled();
+      expect(m.insertIps).not.toHaveBeenCalled();
     });
 
     it('does not look anything up for a record with no ip', async () => {
-      await service.saveApiLog(event([{ ip: null }]));
+      await saveApiLog(db, event([{ ip: null }]));
 
-      expect(ipAccess.findOne).not.toHaveBeenCalled();
+      expect(m.findIp).not.toHaveBeenCalled();
       expect(mockedAxios.get).not.toHaveBeenCalled();
-      expect(ipAccess.saveMany).not.toHaveBeenCalled();
+      expect(m.insertIps).not.toHaveBeenCalled();
     });
 
     it('does not touch the ip table when nothing new was found', async () => {
-      ipAccess.findOne.mockResolvedValue({ ip: '1.1.1.1' });
-      await service.saveApiLog(event([{}, {}]));
-      expect(ipAccess.saveMany).not.toHaveBeenCalled();
+      m.findIp.mockResolvedValue({
+        ip: '1.1.1.1',
+        continent: 'Asia',
+        country: 'Taiwan',
+        region: 'Taipei',
+        city: 'Taipei',
+        mobile: false,
+        dateCreated: new Date(),
+      });
+
+      await saveApiLog(db, event([{}, {}]));
+
+      expect(m.insertIps).not.toHaveBeenCalled();
     });
   });
 
@@ -158,10 +165,10 @@ describe('LoggerService', () => {
     it('still writes the log row when the lookup rejects', async () => {
       mockedAxios.get.mockRejectedValue(new Error('rate limited'));
 
-      await service.saveApiLog(event([{}]));
+      await saveApiLog(db, event([{}]));
 
-      expect(ipAccess.saveMany).not.toHaveBeenCalled();
-      expect(logApiAccess.saveMany.mock.calls[0][0]).toHaveLength(1);
+      expect(m.insertIps).not.toHaveBeenCalled();
+      expect(m.insertLogApi.mock.calls[0][1]).toHaveLength(1);
     });
 
     it('treats a status of fail as a failure', async () => {
@@ -169,10 +176,10 @@ describe('LoggerService', () => {
         data: { ...ipInfo, status: 'fail', message: 'reserved range' },
       });
 
-      await service.saveApiLog(event([{}]));
+      await saveApiLog(db, event([{}]));
 
-      expect(ipAccess.saveMany).not.toHaveBeenCalled();
-      expect(logApiAccess.saveMany.mock.calls[0][0]).toHaveLength(1);
+      expect(m.insertIps).not.toHaveBeenCalled();
+      expect(m.insertLogApi.mock.calls[0][1]).toHaveLength(1);
     });
 
     it('lets a later record succeed after an earlier one failed', async () => {
@@ -180,11 +187,11 @@ describe('LoggerService', () => {
         .mockRejectedValueOnce(new Error('rate limited'))
         .mockResolvedValueOnce({ data: { ...ipInfo, query: '9.9.9.9' } });
 
-      await service.saveApiLog(event([{ ip: '8.8.8.8' }, { ip: '9.9.9.9' }]));
+      await saveApiLog(db, event([{ ip: '8.8.8.8' }, { ip: '9.9.9.9' }]));
 
-      expect(ipAccess.saveMany.mock.calls[0][0]).toHaveLength(1);
-      expect(ipAccess.saveMany.mock.calls[0][0][0].ip).toBe('9.9.9.9');
-      expect(logApiAccess.saveMany.mock.calls[0][0]).toHaveLength(2);
+      expect(m.insertIps.mock.calls[0][1]).toHaveLength(1);
+      expect(m.insertIps.mock.calls[0][1][0].ip).toBe('9.9.9.9');
+      expect(m.insertLogApi.mock.calls[0][1]).toHaveLength(2);
     });
   });
 });

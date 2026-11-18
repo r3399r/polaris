@@ -1,21 +1,21 @@
-import { CockroachDbAccess } from './access/CockroachDbAccess';
-import { MySqlDbAccess } from './access/MySqlDbAccess';
-import { bindings } from './bindings';
-import { HouseKeepingService } from './logic/HouseKeepingService';
-import { LoggerService } from './logic/LoggerService';
-import { MonitorService } from './logic/MonitorService';
-import { RdsService } from './logic/RdsService';
+import { getCockroachDb } from './db/cockroach';
+import { getMysqlDb } from './db/mysql';
+import { houseKeep } from './logic/HouseKeepingService';
+import { saveApiLog } from './logic/LoggerService';
+import { monitorAll } from './logic/MonitorService';
+import { stopDb } from './logic/RdsService';
 import { QueueEvent } from './model/Aws';
 
+// No teardown in a finally anywhere below: each connection pool lives for the
+// lifetime of the execution environment and is reused by warm invocations,
+// which is what the TypeORM cleanUp() this replaces effectively did too -- it
+// only ever released the query runner, never the DataSource.
+
 export async function eventBridgeMonitor(_event: unknown, _context: unknown) {
-  const db = bindings.get(CockroachDbAccess);
-  const service = bindings.get(MonitorService);
   try {
-    await service.monitorAll();
+    await monitorAll(getCockroachDb());
   } catch (e) {
     console.log(e);
-  } finally {
-    await db.cleanup();
   }
 }
 
@@ -23,36 +23,26 @@ export async function eventBridgeHouseKeeping(
   _event: unknown,
   _context: unknown
 ) {
-  const cockroachDb = bindings.get(CockroachDbAccess);
-  const mysqlDb = bindings.get(MySqlDbAccess);
-  const service = bindings.get(HouseKeepingService);
   try {
-    await service.houseKeep();
+    await houseKeep(getCockroachDb(), getMysqlDb());
   } catch (e) {
     console.log(e);
-  } finally {
-    await cockroachDb.cleanup();
-    await mysqlDb.cleanup();
   }
 }
 
 export async function logger(event: QueueEvent, _context: any) {
   console.log(event);
-  const db = bindings.get(MySqlDbAccess);
-  const service = bindings.get(LoggerService);
-  await db.startTransaction();
   try {
-    await service.saveApiLog(event);
-    await db.commitTransaction();
+    // Throwing inside the callback rolls the transaction back. The error is
+    // then swallowed rather than rethrown, deliberately: rethrowing would fail
+    // the batch and SQS would redeliver it, and this queue has no DLQ and four
+    // days of retention, so a poison message would retry for days.
+    await getMysqlDb().transaction(async (tx) => await saveApiLog(tx, event));
   } catch (e) {
     console.error(e);
-    await db.rollbackTransaction();
-  } finally {
-    await db.cleanup();
   }
 }
 
 export async function eventBridgeStopDb(_event: unknown, _context: unknown) {
-  const service = bindings.get(RdsService);
-  await service.stopDb();
+  await stopDb();
 }

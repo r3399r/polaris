@@ -33,19 +33,21 @@ Two databases are involved: **CockroachDB** (`monitor`, `monitor_his`) and
 ```
 package.json               root; ONLY forwards scripts into backend/ (see the workspaces gotcha)
 deploy.sh                  backend stack first, then the webapp export to S3
-backend/src/index.ts       lambda handlers — resolve from container, try/catch/finally, clean up
-backend/src/bindings.ts    inversify container; every new class must be bound here
-backend/src/logic/*Service.ts  business logic
-backend/src/access/*Access.ts  one per table (+ CockroachDbAccess / MySqlDbAccess for raw SQL
-                           & transactions, RdsAccess for the AWS RDS control plane)
-backend/src/util/*Database.ts  DataSource/QueryRunner lifecycle per engine
-backend/src/model/         plain types; model/entity/ holds TypeORM entities
+backend/src/index.ts       lambda handlers — get a db handle, call a service, catch
+backend/src/logic/*Service.ts  business logic, exported as plain functions
+backend/src/db/mysql.ts    getMysqlDb(): one drizzle/mysql2 pool per execution environment
+backend/src/db/cockroach.ts  getCockroachDb(): the same, over the Postgres wire protocol
+backend/src/db/schema/     drizzle table definitions, one file per engine
+backend/src/db/queries/    every statement this service issues, one file per engine
+backend/src/lib/           wrappers over outside services (AWS RDS, Google Sheets)
+backend/src/model/         plain types for things crossing a boundary (sqs event, payloads)
 backend/package.json       the deployed version number lives here, as it always has
 backend/aws/cloudformation/template.yaml   ALL infrastructure, including the webapp's
                            S3 bucket, CloudFront distribution and Route53 record
 webapp/app/                Next.js app router; page.tsx is the whole ui today
 webapp/next.config.ts      output:'export' in production only, trailingSlash:true
-db/*.sql                   DDL, applied by hand (synchronize: false — no TypeORM migrations)
+db/*.sql                   DDL, applied by hand. There is no drizzle-kit and no migration
+                           runner; db/schema/ only has to agree with these files
 db/migration/              standalone one-off data-migration script, its own package.json
 ```
 
@@ -53,13 +55,14 @@ db/migration/              standalone one-off data-migration script, its own pac
 
 ### Backend
 
-- **DI everywhere.** Classes are `@injectable()` with property injection
-  (`@inject(Foo) private readonly foo!: Foo;`) — never constructor injection, never `new`
-  a service. Register the class in [backend/src/bindings.ts](backend/src/bindings.ts) or
-  `bindings.get()` will throw at runtime. Entities are registered with
-  `.toFunction(XEntity)` against `cockroachDbEntitiesBindingId` / `mySqlDbEntitiesBindingId`.
-- **Layering is strict:** handler → service → access → database util. Services must not
-  touch a `QueryRunner` directly; access classes must not hold business rules.
+- **No classes, no DI container.** Everything is a module exporting plain functions.
+  There is no inversify, no `@injectable()`, no `bindings.ts` — a function that needs a
+  database handle takes it as its first parameter, and the handler is the only place that
+  calls `getMysqlDb()` / `getCockroachDb()`.
+- **Every SQL statement lives in `src/db/queries/`.** Services never build a query; they
+  call a named function from there. This is the one place polaris deliberately differs
+  from `castor`, which writes drizzle queries inline in its routes — see the testing note
+  in Commands for why.
 - **Imports.** Use the `src/*` path alias for anything outside the current directory —
   `../*` is banned by ESLint (`no-restricted-imports`). Siblings use `./Foo`.
   Import order is enforced and alphabetised (`import/order`, `sort-imports`).
@@ -67,15 +70,24 @@ db/migration/              standalone one-off data-migration script, its own pac
   **no** braces. This is the opposite of the usual default; match the surrounding code.
 - **`newline-before-return`** is an error, and arrow bodies must be
   `as-needed` (no `=> { return x; }`).
-- **Entities** declare a `type` alias plus a class implementing it; snake_case columns are
-  mapped with `name:`. Integer-ish columns are typed `string` in TS on purpose
-  (`int8`/`int` coming back from the drivers) — keep that, don't "fix" it to `number`.
+- **Schema** is declared in `src/db/schema/`, snake_case column names passed explicitly.
+  Row and insert types come from drizzle (`typeof fooTable.$inferSelect` /
+  `$inferInsert`) — do not hand-write them. Integer columns are `number` here; the old
+  TypeORM entities typed them `string` because the drivers returned strings, and that is
+  no longer true.
+- **Every DATETIME takes a `Date`, never a string.** The columns are declared
+  `mode: 'date'` so the mysql2 driver formats the value into MySQL's DATETIME literal
+  syntax, which is not ISO 8601 — passing an ISO string fails with
+  `ER_TRUNCATED_WRONG_VALUE`. There are no insert hooks either, so `date_created` has to
+  be set at every call site.
 - Prettier: 80 cols, single quotes, 2 spaces, es5 trailing commas.
 - Config comes from `process.env` only, read at point of use; every variable is wired in
   the CloudFormation template from SSM parameters. Never hardcode a secret or endpoint.
-  `PRIVATE_KEY` stores newlines as `**` and is un-escaped in `GoogleApiService`.
-- Lambdas are short-lived: a handler must `await db.cleanup()` in a `finally`, and the
-  `logger` handler wraps its work in an explicit transaction.
+  `PRIVATE_KEY` stores newlines as `**` and is un-escaped in `src/lib/googleSheets.ts`.
+- **A handler never tears a connection down.** Each pool lives for the lifetime of the
+  execution environment and is reused by warm invocations; `closeMysqlDb` /
+  `closeCockroachDb` exist for tests only. The `logger` handler wraps its work in
+  `getMysqlDb().transaction(...)`, which rolls back if the callback throws.
 
 ### Webapp
 
@@ -108,13 +120,20 @@ Notes:
   `src/*` aliases in the emitted `lib/` output. Plain `tsc` produces unloadable Lambda code.
 - `strict`, `noUnusedLocals`, `noUnusedParameters` and `noEmitOnError` are on; prefix
   deliberately unused params with `_`.
-- **There are currently no test files**, so `npm test` exits 1 with "0 matches" — that is
-  the expected state, not a break. `jest` matches `backend/src/**/*.test.ts`, so new tests
-  go next to the code they cover, and `exclude` in
-  [backend/tsconfig.json](backend/tsconfig.json) keeps them out of the Lambda bundle —
-  without it `tspc` emits them into `lib/` and ships them. If you add behaviour, add the
-  test: build a fresh inversify `Container` and bind a mock over the access class, never hit
-  a real database or a real AWS api.
+- Tests live next to the code they cover; `jest` matches `backend/src/**/*.test.ts`, and
+  `exclude` in [backend/tsconfig.json](backend/tsconfig.json) keeps them out of the Lambda
+  bundle — without it `tspc` emits them into `lib/` and ships them. Coverage is the four
+  services and nothing else.
+- **Mock the query module, never a database.** `jest.mock('src/db/queries/mysql')` (or
+  `.../cockroach`) and pass `{} as MysqlDb` as the handle — the queries are mocked, so it is
+  never dereferenced. This is why every statement lives in `src/db/queries/` instead of
+  inline in the services as `castor` writes them: `castor` covers its database code with
+  regression tests against a real MySQL and keeps its unit tests to pure logic, which
+  polaris has no equivalent of. Writing queries inline here would have left the services
+  untestable without a live database.
+- The `exclude` that keeps tests out of the bundle also takes them out of the TS project,
+  so an editor shows "Cannot find name 'jest'" and unresolved `src/*` imports **in test
+  files only**. jest resolves both itself; the red squiggles are cosmetic.
 - Neither `deploy.sh` nor the GitHub workflows run lint or tests, so neither gates a
   release.
 
@@ -155,14 +174,15 @@ Notes:
   not what `castor`'s layer is for: that one holds `chromium-arm64.zip` and nothing else,
   because castor bundles its app code with esbuild. Getting rid of polaris's layer means
   switching to bundling too, which is its own change.)
-- **`npm i` in `backend/` fails on Windows.** `pg-native` pulls in `libpq`, a native module
-  needing node-gyp and a Visual Studio install. Use `npm ci --ignore-scripts` locally;
-  nothing in the build or the tests needs the compiled binding. CI (ubuntu) is unaffected.
-  Do not delete `backend/node_modules` on a machine without Visual Studio — it cannot be
-  reinstalled the normal way.
-- **`npm run pre:deploy` also fails on Windows**, for an unrelated reason: `build:layer`'s
-  `cp -R node_modules dist/nodejs` cannot recreate the dangling `.bin` symlinks npm leaves
-  behind. The layer is only ever built in CI, so this is not worth fixing.
+- There are **no native modules left**, so `npm i` and `npm run pre:deploy` both work on
+  Windows. They used not to: `pg-native` pulled in `libpq`, which needs node-gyp and a
+  Visual Studio install, and its leftovers also broke `build:layer`'s
+  `cp -R node_modules dist/nodejs`. It was dropped along with TypeORM — `pg` is pure
+  JavaScript and nothing requires the binding. Do not add it back.
+- **`npm run pre:deploy` deletes your devDependencies.** `build:layer` runs
+  `npm install --production` to prune the tree before copying it into the layer, so jest,
+  eslint and tsc are gone afterwards and `npm test` fails until you `npm i` again. Harmless
+  in CI, which is a fresh checkout; surprising locally.
 - **`next build` fails if invoked from a lowercase drive letter** (`/c/Users/...`, as Git
   Bash reports it). React gets resolved twice, under `c:\` and `C:\`, and prerendering dies
   with `Cannot read properties of null (reading 'useContext')`. Build from PowerShell, or
@@ -175,14 +195,38 @@ Notes:
 ### Application behaviour
 
 - `MonitorService` appends `limit/offset` to operator-authored SQL from the `monitor` table
-  and paginates until an empty page; `SQL_LIMIT` must be set and numeric or it throws.
-- `CockroachDatabase.cleanUp()` / `MySqlDatabase.cleanUp()` destroy the DataSource only when
-  `!isInitialized`, which is effectively never — the connection is intentionally left for
-  container reuse. Don't "fix" this without checking Lambda warm-start behaviour.
-- `GoogleApiService` caches the `GoogleSpreadsheet` in a singleton, so `loadInfo()` runs once
-  per warm container. `getSheet` creates a missing tab and then re-reads `sheetsByTitle`,
-  relying on `addSheet` refreshing that map — a sheet added out-of-band mid-container won't
-  be seen.
+  and paginates until an empty page; `SQL_LIMIT` must be set and numeric or it throws. That
+  statement is run through `sql.raw` because the operator writes it — it cannot be
+  parameterised, and a monitor whose SQL carries its own `limit` or a trailing semicolon
+  breaks when the suffix is appended.
+- **`MonitorService`'s `refreshPeriod` is inert.** The check is
+  `new Date().getHours() % refreshPeriod`, `getHours()` is local time (UTC in Lambda), and
+  the schedule fires at 00:01 UTC — so `currentHour` is always 0 and `0 % n === 0` for
+  every n. Every monitor runs every day whatever its configured period. This is pinned by
+  `MonitorService.test.ts`; changing it is a separate, deliberate decision.
+- **A monitor whose query returns nothing writes no `monitor_his` row at all**, so "it ran
+  and found nothing" and "it never ran" are indistinguishable in the history. Also pinned
+  by a test.
+- **`monitor_his` holds no business data** — only `row_count`, `elapsed_time` and
+  `success`. The query results go straight to Google Sheets and are never stored, so
+  anything that wants the data has to re-run `monitor.sql` or read the Sheet.
+- **CockroachDB is not an officially supported drizzle target.** It is reached through
+  `drizzle-orm/node-postgres` because it speaks the Postgres wire protocol. What makes that
+  acceptable is how little it is asked to do: one select, one insert, raw SQL for the rest.
+  The cluster is named twice in the connection — prefixed onto the database name *and* as
+  the `--cluster` startup option — carried over from the TypeORM config, where both were
+  set and the connection worked.
+- **drizzle rejects an insert with an empty `VALUES` list**, where TypeORM's `save([])`
+  silently did nothing. `insertLogApi` / `insertIps` guard for that, so call sites do not
+  have to; a new insert helper needs the same guard.
+- `findLogApiCutoff` and `findIp` have **hand-written return types** including `undefined`.
+  `noUncheckedIndexedAccess` is off, so destructuring a drizzle result array gives TS a
+  non-optional element and the inferred type would claim a row is always found. Both
+  callers branch on its absence.
+- `src/lib/googleSheets.ts` caches the `GoogleSpreadsheet` in a module singleton, so
+  `loadInfo()` runs once per warm container. `getSheet` creates a missing tab and then
+  re-reads `sheetsByTitle`, relying on `addSheet` refreshing that map — a sheet added
+  out-of-band mid-container won't be seen.
 - ip-api.com is a free unauthenticated endpoint with rate limits; IP lookups are skipped for
   IPs already in the `ip` table and failures are swallowed per record.
 - `db/migration/` is a separate npm project with its own `.env` — don't add it to the root
