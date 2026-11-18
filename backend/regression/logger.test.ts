@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeMysqlDb, getMysqlDb } from 'src/db/mysql';
+import { insertIps } from 'src/db/queries/mysql';
 import { ipTable, logApiTable } from 'src/db/schema/mysql';
 import * as ipApi from 'src/lib/ipApi';
 import { saveApiLog } from 'src/logic/LoggerService';
@@ -126,6 +127,52 @@ describe('logger against a real MySQL', () => {
       expect(ip.getIpInfo).not.toHaveBeenCalled();
       const rows = await getMysqlDb().select().from(ipTable);
       expect(rows).toHaveLength(1);
+    });
+  });
+
+  // Driven directly rather than through saveApiLog, because the service only
+  // reaches the insert when findIp missed -- which is exactly the state two
+  // concurrent batches both end up in, and cannot be arranged from one caller.
+  describe('inserting an ip that is already there', () => {
+    const row = {
+      ip: '1.1.1.1',
+      continent: 'Asia',
+      country: 'Taiwan',
+      region: 'Taipei',
+      city: 'Taipei',
+      mobile: false,
+      dateCreated: new Date('2026-01-01T00:00:00.000Z'),
+    };
+
+    it('does not throw, and does not duplicate the row', async () => {
+      const db = getMysqlDb();
+      await insertIps(db, [row]);
+
+      await expect(insertIps(db, [row])).resolves.toBeUndefined();
+      expect(await db.select().from(ipTable)).toHaveLength(1);
+    });
+
+    it('leaves the stored row untouched', async () => {
+      const db = getMysqlDb();
+      await insertIps(db, [row]);
+
+      await insertIps(db, [
+        { ...row, city: 'Kaohsiung', dateCreated: new Date() },
+      ]);
+
+      const [stored] = await db.select().from(ipTable);
+      expect(stored.city).toBe('Taipei');
+      expect(stored.dateCreated.getTime()).toBe(row.dateCreated.getTime());
+    });
+
+    it('still inserts the rows in the batch that are new', async () => {
+      const db = getMysqlDb();
+      await insertIps(db, [row]);
+
+      await insertIps(db, [row, { ...row, ip: '8.8.8.8' }]);
+
+      const rows = await db.select().from(ipTable);
+      expect(rows.map((r) => r.ip).sort()).toEqual(['1.1.1.1', '8.8.8.8']);
     });
   });
 

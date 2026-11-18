@@ -78,10 +78,32 @@ export const findIp = async (
   return row;
 };
 
+/**
+ * Insert-if-absent, because a duplicate is expected here and is not an error.
+ *
+ * LoggerService calls findIp first, but the event source mapping allows two
+ * concurrent batches, so both can see the same unknown ip, both look it up and
+ * both insert -- and the loser got `ER_DUP_ENTRY: Duplicate entry for key
+ * 'ip.PRIMARY'`, failing the transaction and rolling the whole batch back. The
+ * race is not new; TypeORM's `manager.save()` hid it by issuing an UPDATE when
+ * the primary key already existed.
+ *
+ * `ON DUPLICATE KEY UPDATE ip = ip` rather than `INSERT IGNORE`: IGNORE
+ * downgrades *every* error to a warning, including a value too long for its
+ * column, which would silently truncate the geo data. This handles the key
+ * conflict and nothing else.
+ *
+ * The existing row is left exactly as it was. The geo data for an ip does not
+ * meaningfully change, and keeping the first `date_created` is also what
+ * TypeORM did -- its @BeforeInsert hook never ran on the update path.
+ */
 export const insertIps = async (db: MysqlDb, rows: IpInsert[]) => {
   if (rows.length === 0) return;
 
-  await db.insert(ipTable).values(rows);
+  await db
+    .insert(ipTable)
+    .values(rows)
+    .onDuplicateKeyUpdate({ set: { ip: sql`ip` } });
 };
 
 export const deleteIpOlderThanThreeMonths = async (db: MysqlDb) => {

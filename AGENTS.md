@@ -289,6 +289,15 @@ Notes:
 - **drizzle rejects an insert with an empty `VALUES` list**, where TypeORM's `save([])`
   silently did nothing. `insertLogApi` / `insertIps` guard for that, so call sites do not
   have to; a new insert helper needs the same guard.
+- **`insertIps` is an insert-if-absent** (`ON DUPLICATE KEY UPDATE ip = ip`), and has to
+  be. `LoggerService` calls `findIp` first, but the event source mapping allows two
+  concurrent batches, so both can see the same unknown ip and both insert — and the loser
+  used to get `ER_DUP_ENTRY`, failing the transaction and rolling its whole batch back.
+  The race is not new; TypeORM's `manager.save()` hid it by issuing an UPDATE when the
+  primary key existed, and the drizzle rewrite exposed it in production. Not
+  `INSERT IGNORE`: that downgrades every error to a warning, including a value too long
+  for its column. Pinned by three cases in `regression/logger.test.ts` that fail with the
+  real `ER_DUP_ENTRY` if the clause is removed.
 - `findLogApiCutoff` and `findIp` have **hand-written return types** including `undefined`.
   `noUncheckedIndexedAccess` is off, so destructuring a drizzle result array gives TS a
   non-optional element and the inferred type would claim a row is always found. Both
