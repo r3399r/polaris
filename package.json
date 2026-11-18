@@ -6,6 +6,7 @@
   "scripts": {
     "lint": "cd backend && npm run lint",
     "fix": "cd backend && npm run fix",
+    "typecheck": "cd backend && npm run typecheck",
     "test": "cd backend && npm run test",
     "test:coverage": "cd backend && npm run test:coverage",
     "pre:dev": "cd backend && npm run pre:dev",

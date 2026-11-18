@@ -10,26 +10,41 @@ let db: NodePgDatabase | undefined;
  * little this database is asked to do -- one select, one insert, and raw SQL
  * for everything else.
  *
- * The cluster is identified twice, which is deliberate and copied from the
- * TypeORM config this replaces: once prefixed onto the database name and once
- * as the `--cluster` startup option. Both are CockroachDB Cloud routing
- * mechanisms and the connection already worked with both set, so neither is
- * dropped here on a guess.
+ * COCKROACH_DB_CLUSTER selects between two shapes, and its presence is the
+ * switch rather than a separate flag because production always resolves it from
+ * SSM and a local single node has no such thing:
+ *
+ *   set   -- CockroachDB Cloud. The cluster is identified twice, once prefixed
+ *            onto the database name and once as the `--cluster` startup
+ *            option. Both are Cloud routing mechanisms, and the TypeORM config
+ *            this replaces set both and worked, so neither is dropped on a
+ *            guess. TLS required.
+ *   unset -- `cockroach start-single-node --insecure` from docker-compose.yml.
+ *            No TLS, no routing, plain database name.
  *
  * Same pool lifetime as MySQL: one per execution environment, never closed.
  */
 export const getCockroachDb = (): NodePgDatabase => {
   if (db === undefined) {
-    pool = new Pool({
+    const cluster = process.env.COCKROACH_DB_CLUSTER;
+    const common = {
       host: process.env.COCKROACH_DB_HOST,
-      port: 26257,
+      port: Number(process.env.COCKROACH_DB_PORT ?? 26257),
       user: process.env.COCKROACH_DB_USER,
       password: process.env.COCKROACH_DB_PASSWORD,
-      database: `${process.env.COCKROACH_DB_CLUSTER}.${process.env.PROJECT}`,
-      ssl: true,
-      options: `--cluster=${process.env.COCKROACH_DB_CLUSTER}`,
       max: Number(process.env.DB_POOL_SIZE ?? 2),
-    });
+    };
+
+    pool = new Pool(
+      cluster
+        ? {
+            ...common,
+            database: `${cluster}.${process.env.PROJECT}`,
+            ssl: true,
+            options: `--cluster=${cluster}`,
+          }
+        : { ...common, database: process.env.PROJECT }
+    );
     db = drizzle(pool);
   }
 

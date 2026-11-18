@@ -1,13 +1,14 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as cockroach from 'src/db/queries/cockroach';
 import { CockroachDb } from 'src/db/queries/cockroach';
 import * as mysql from 'src/db/queries/mysql';
 import { MysqlDb } from 'src/db/queries/mysql';
 import { houseKeep } from 'src/logic/HouseKeepingService';
 
-jest.mock('src/db/queries/cockroach');
-jest.mock('src/db/queries/mysql');
-const c = jest.mocked(cockroach);
-const m = jest.mocked(mysql);
+vi.mock('src/db/queries/cockroach');
+vi.mock('src/db/queries/mysql');
+const c = vi.mocked(cockroach);
+const m = vi.mocked(mysql);
 
 // The queries are mocked, so neither handle is ever dereferenced.
 const cockroachDb = {} as CockroachDb;
@@ -28,7 +29,7 @@ describe('HouseKeepingService', () => {
     m.deleteIpOlderThanThreeMonths.mockReset().mockResolvedValue(undefined);
   });
 
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => vi.restoreAllMocks());
 
   describe('cockroach sql stats', () => {
     it('resets them only when RESET_SQL_STATS is the string true', async () => {

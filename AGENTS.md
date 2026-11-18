@@ -41,6 +41,8 @@ backend/src/db/schema/     drizzle table definitions, one file per engine
 backend/src/db/queries/    every statement this service issues, one file per engine
 backend/src/lib/           wrappers over outside services (AWS RDS, Google Sheets)
 backend/src/model/         plain types for things crossing a boundary (sqs event, payloads)
+backend/regression/        database-backed tests; setup.ts also holds the local environment
+backend/docker-compose.yml MySQL + CockroachDB for those tests, started with db:up
 backend/package.json       the deployed version number lives here, as it always has
 backend/aws/cloudformation/template.yaml   ALL infrastructure, including the webapp's
                            S3 bucket, CloudFront distribution and Route53 record
@@ -105,12 +107,22 @@ From the repo root — these only forward into `backend/`:
 ```sh
 npm run lint          # eslint + prettier check (parallel)
 npm run fix           # autofix both
-npm test              # jest
+npm run typecheck     # tsc --noEmit over tsconfig.json AND tsconfig.tools.json
+npm test              # vitest: the unit tests, then the regression suite
 npm run test:coverage
 npm run pre:dev       # fix + test:coverage — run this before committing
 npm run pre:deploy    # clean + build:lambda + build:layer (what deploy.sh runs)
 npm run dev:webapp    # next dev
 npm run build:webapp  # static export into webapp/out
+```
+
+In `backend/`, not forwarded because they need Docker:
+
+```sh
+npm run db:up           # MySQL + CockroachDB, schema loaded from db/*.sql
+npm run db:down         # and gone. No volumes, so this pair is the reset
+npm run test:unit       # vitest run --dir src
+npm run test:regression # vitest run --dir regression -- db:up has to be up
 ```
 
 Notes:
@@ -120,20 +132,39 @@ Notes:
   `src/*` aliases in the emitted `lib/` output. Plain `tsc` produces unloadable Lambda code.
 - `strict`, `noUnusedLocals`, `noUnusedParameters` and `noEmitOnError` are on; prefix
   deliberately unused params with `_`.
-- Tests live next to the code they cover; `jest` matches `backend/src/**/*.test.ts`, and
-  `exclude` in [backend/tsconfig.json](backend/tsconfig.json) keeps them out of the Lambda
-  bundle — without it `tspc` emits them into `lib/` and ships them. Coverage is the four
-  services and nothing else.
-- **Mock the query module, never a database.** `jest.mock('src/db/queries/mysql')` (or
+- **The test runner is vitest**, as in `castor`, and `globals` is off — every test file
+  imports `describe`/`it`/`expect`/`vi` from `'vitest'` explicitly. Tests live next to the
+  code they cover (`vitest run --dir src`), and `exclude` in
+  [backend/tsconfig.json](backend/tsconfig.json) keeps them out of the Lambda bundle —
+  without it `tspc` emits them into `lib/` and ships them. That `exclude` is also why
+  [backend/tsconfig.tools.json](backend/tsconfig.tools.json) exists: the tests have no
+  project of their own otherwise, so the `src/*` alias would not resolve in them.
+  `vite-tsconfig-paths` is pointed at that file and `npm run typecheck` checks both.
+- **Mock the query module, never a database.** `vi.mock('src/db/queries/mysql')` (or
   `.../cockroach`) and pass `{} as MysqlDb` as the handle — the queries are mocked, so it is
   never dereferenced. This is why every statement lives in `src/db/queries/` instead of
   inline in the services as `castor` writes them: `castor` covers its database code with
   regression tests against a real MySQL and keeps its unit tests to pure logic, which
   polaris has no equivalent of. Writing queries inline here would have left the services
   untestable without a live database.
-- The `exclude` that keeps tests out of the bundle also takes them out of the TS project,
-  so an editor shows "Cannot find name 'jest'" and unresolved `src/*` imports **in test
-  files only**. jest resolves both itself; the red squiggles are cosmetic.
+- **Never `vi.mock()` a node_modules package.** Vite pre-bundles dependencies and the mock
+  registry is keyed by resolved id, so the mock silently fails to apply — and the failure
+  is worse than consistent: it passes when the file runs alone, and with a warm
+  `node_modules/.vite` cache it passes in the suite too, so only a cold cache (i.e. CI)
+  shows it. `vi.mock` a module under `src/` instead; `src/lib/ipApi.ts` exists only so the
+  ip-api call has such a module to live in. If a suite result looks suspicious, delete
+  `node_modules/.vite` and run again.
+- **The regression suite talks to real databases**, started by `npm run db:up` from
+  `backend/`. It calls the service functions against them and reads the rows back — which
+  is the only way to check what the unit tests cannot: that a `Date` survives a
+  `DATETIME(3)` round trip, that the raw `DATE_SUB` fragments are valid SQL, that the
+  row-cap cutoff query picks the right row, that `boolean()` maps to `tinyint(1)`, and that
+  `logger`'s transaction really does roll the ip row back when the log insert fails.
+  Google Sheets, ip-api and the AWS sdk stay mocked in it; everything else is real.
+- **The regression suite does not prove the CockroachDB Cloud connection works.** A local
+  `start-single-node --insecure` needs no TLS and no `--cluster` routing, so that code path
+  — the riskiest part of the drizzle migration — is only exercised by a real deploy.
+  Neither is the suite in CI yet; `castor` has not done that half either.
 - Neither `deploy.sh` nor the GitHub workflows run lint or tests, so neither gates a
   release.
 
@@ -183,14 +214,45 @@ Notes:
   `npm install --production` to prune the tree before copying it into the layer, so jest,
   eslint and tsc are gone afterwards and `npm test` fails until you `npm i` again. Harmless
   in CI, which is a fresh checkout; surprising locally.
-- **`next build` fails if invoked from a lowercase drive letter** (`/c/Users/...`, as Git
-  Bash reports it). React gets resolved twice, under `c:\` and `C:\`, and prerendering dies
-  with `Cannot read properties of null (reading 'useContext')`. Build from PowerShell, or
-  any shell whose cwd is `C:\Users\...`.
+- **The Windows drive letter's case matters, twice.** `next build` fails outright if
+  invoked from a lower-case drive letter (`/c/Users/...`, as Git Bash reports it): React
+  gets resolved twice, under `c:\` and `C:\`, and prerendering dies with
+  `Cannot read properties of null (reading 'useContext')`. Build the webapp from
+  PowerShell, or any shell whose cwd is `C:\Users\...`. On the backend the same split
+  spelling breaks vitest's coverage silently instead — the v8 provider keeps only results
+  under its root, so a lower-case root reports 0% while every test passes — which is why
+  [backend/vitest.config.mts](backend/vitest.config.mts) forces the root's drive letter
+  upper case. Taken from `castor`, which diagnosed it.
+- `vitest.config` is **`.mts`, not `.ts`**: the package is CommonJS (the Lambda build needs
+  it), and vite warns on every run about ESM syntax in a config loaded as CommonJS. It also
+  deliberately does not import from `'vite'` — those types are only reachable under
+  `moduleResolution` `node16`/`nodenext`/`bundler`, and `tsconfig.json` is on classic
+  `node`, so `npm run typecheck` would fail on the config file.
 - **`.gitignore` anchors the build outputs to `backend/` on purpose.** A bare `lib` or
   `dist` pattern also matches anything of that name under `webapp/`, which would be source,
   and silently drops it from every commit — it still builds locally and then fails in CI.
   `db/migration` has its own `.gitignore` for its `dist`/`node_modules`/`.env`.
+
+### The local databases
+
+- **`COCKROACH_DB_CLUSTER` being set or not is what selects Cloud vs local** in
+  `src/db/cockroach.ts` — set means the cluster-prefixed database name, the `--cluster`
+  startup option and TLS; unset means a plain database name and no TLS. Production always
+  resolves it from SSM, a single node has no such thing, so there is no separate flag.
+- **`MYSQL_DB_PORT` / `COCKROACH_DB_PORT` default to 3306 / 26257**, which is what
+  production uses, and the compose file publishes 3307 / 26258 instead. `castor`'s compose
+  file binds 3306, and only one process can have it.
+- **CockroachDB refuses `--insecure` with a hostname in `--listen-addr`** —
+  `hostname of listen_addr must be "127.0.0.1" or "localhost"`. The compose file passes no
+  `--listen-addr` at all, whose default `:26257` already means every interface. Do not
+  "fix" it to `0.0.0.0:26257`; the node will not start.
+- **CockroachDB has no `/docker-entrypoint-initdb.d`**, so a one-shot `cockroach-init`
+  service applies the schema once the node is healthy. It drops and recreates the database
+  rather than needing `CREATE TABLE IF NOT EXISTS`, which keeps `db/*.sql` exactly as they
+  are applied to the real cluster and makes `db:up` repeatable.
+- **`docker compose up --wait` fails on a service that exited**, even with status 0, so
+  `db:up` waits on the two long-running services and then runs the init container with
+  `compose run`, whose exit code it can trust.
 
 ### Application behaviour
 
@@ -199,6 +261,14 @@ Notes:
   statement is run through `sql.raw` because the operator writes it — it cannot be
   parameterised, and a monitor whose SQL carries its own `limit` or a trailing semicolon
   breaks when the suffix is appended.
+- **The rows a monitor sends to Google Sheets have string integers.** `sql.raw` means
+  there is no drizzle column type to convert anything, and the pg driver's default parser
+  for `INT8` — which is every integer in CockroachDB — returns a string, to avoid losing
+  precision past 2^53. So `select 1 as n` reaches the Sheet as `{ n: '1' }`. This is not
+  new: TypeORM's `manager.query()` went through the same parsers. It matters only if the
+  Sheet is expected to treat the column as a number. Reads that go *through the schema*,
+  such as `monitor_his.rowCount`, do come back as numbers — `bigint({ mode: 'number' })`
+  is what does that. Both halves are pinned in `regression/monitor.test.ts`.
 - **`MonitorService`'s `refreshPeriod` is inert.** The check is
   `new Date().getHours() % refreshPeriod`, `getHours()` is local time (UTC in Lambda), and
   the schedule fires at 00:01 UTC — so `currentHour` is always 0 and `0 % n === 0` for

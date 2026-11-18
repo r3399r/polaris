@@ -1,4 +1,3 @@
-import axios from 'axios';
 import {
   findIp,
   insertIps,
@@ -7,22 +6,9 @@ import {
   LogApiInsert,
   MysqlDb,
 } from 'src/db/queries/mysql';
+import { getIpInfo } from 'src/lib/ipApi';
 import { QueueEvent } from 'src/model/Aws';
-import { Ip } from 'src/model/Ip';
 import { LoggerInput } from 'src/model/Logger';
-
-/**
- * ip-api.com is free and unauthenticated, so it is rate limited and answers
- * 200 with `status: 'fail'` rather than an http error.
- */
-const getIpInfo = async (ip: string) => {
-  const result = await axios.get<Ip>(
-    `http://ip-api.com/json/${ip}?fields=1171481`
-  );
-  if (result.data.status === 'fail') throw new Error('ip-api failed');
-
-  return result.data;
-};
 
 /**
  * Writes one log_api row per queue record, and an ip row for each caller ip

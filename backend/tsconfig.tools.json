@@ -1,0 +1,9 @@
+{
+  "//": "Everything tsconfig.json leaves out. That one is scoped to what ships in the Lambda bundle -- it excludes src/**/*.test.ts, because tspc would otherwise emit the tests into lib/ -- so the tests and the regression suite have no project of their own, and the `src/*` path alias does not resolve in them. vite-tsconfig-paths reads this file instead, and `npm run typecheck` checks both.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "regression/**/*.ts", "vitest.config.mts"],
+  "exclude": ["node_modules", "lib", "dist"]
+}

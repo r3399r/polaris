@@ -1,8 +1,9 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as rds from 'src/lib/rds';
 import { stopDb } from 'src/logic/RdsService';
 
-jest.mock('src/lib/rds');
-const mockRds = jest.mocked(rds);
+vi.mock('src/lib/rds');
+const mockRds = vi.mocked(rds);
 
 const HOST =
   'celestial-studio-mysql-test.cj6syu0kqudx.ap-east-2.rds.amazonaws.com';
@@ -15,13 +16,13 @@ describe('RdsService', () => {
     });
 
   beforeEach(() => {
-    jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
     process.env.MYSQL_DB_HOST = HOST;
     mockRds.describeDbInstance.mockReset();
     mockRds.stopDbInstance.mockReset();
   });
 
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => vi.restoreAllMocks());
 
   describe('instance identifier', () => {
     it('is the first label of the rds endpoint', async () => {

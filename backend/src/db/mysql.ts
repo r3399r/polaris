@@ -18,7 +18,9 @@ export const getMysqlDb = (): MySql2Database => {
   if (db === undefined) {
     pool = createPool({
       host: process.env.MYSQL_DB_HOST,
-      port: 3306,
+      // 3306 everywhere that matters; the regression suite publishes the
+      // container on another port so it does not collide with castor's.
+      port: Number(process.env.MYSQL_DB_PORT ?? 3306),
       user: process.env.PROJECT,
       password: process.env.MYSQL_DB_PASSWORD,
       database: process.env.PROJECT,

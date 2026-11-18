@@ -1,12 +1,13 @@
+import { afterEach, beforeEach, describe, expect, it, Mock, vi } from 'vitest';
 import * as cockroach from 'src/db/queries/cockroach';
 import { CockroachDb } from 'src/db/queries/cockroach';
 import * as googleSheets from 'src/lib/googleSheets';
 import { monitorAll } from 'src/logic/MonitorService';
 
-jest.mock('src/db/queries/cockroach');
-jest.mock('src/lib/googleSheets');
-const q = jest.mocked(cockroach);
-const sheets = jest.mocked(googleSheets);
+vi.mock('src/db/queries/cockroach');
+vi.mock('src/lib/googleSheets');
+const q = vi.mocked(cockroach);
+const sheets = vi.mocked(googleSheets);
 
 // The queries are mocked, so the handle itself is never dereferenced.
 const db = {} as CockroachDb;
@@ -28,20 +29,20 @@ const monitor = (over: Partial<MonitorRow> = {}): MonitorRow => ({
 
 describe('MonitorService', () => {
   let sheet: {
-    clear: jest.Mock;
-    setHeaderRow: jest.Mock;
-    addRows: jest.Mock;
+    clear: Mock;
+    setHeaderRow: Mock;
+    addRows: Mock;
   };
 
   beforeEach(() => {
-    jest.spyOn(console, 'log').mockImplementation(() => undefined);
-    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     process.env.SQL_LIMIT = '2';
 
     sheet = {
-      clear: jest.fn(),
-      setHeaderRow: jest.fn(),
-      addRows: jest.fn(),
+      clear: vi.fn(),
+      setHeaderRow: vi.fn(),
+      addRows: vi.fn(),
     };
 
     q.findMonitors.mockReset().mockResolvedValue([]);
@@ -51,8 +52,8 @@ describe('MonitorService', () => {
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
-    jest.useRealTimers();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   describe('SQL_LIMIT', () => {
@@ -224,7 +225,7 @@ describe('MonitorService', () => {
   // returns the stated hour in any timezone the suite runs in.
   describe('refreshPeriod (currently inert)', () => {
     it('runs every monitor at hour 0, whatever the period', async () => {
-      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 1, 0, 0, 0));
+      vi.useFakeTimers().setSystemTime(new Date(2026, 0, 1, 0, 0, 0));
       q.findMonitors.mockResolvedValue([
         monitor({ name: 'hourly', refreshPeriod: 1 }),
         monitor({ name: 'daily', refreshPeriod: 24 }),
@@ -238,7 +239,7 @@ describe('MonitorService', () => {
     });
 
     it('would skip at a non-zero hour, which production never reaches', async () => {
-      jest.useFakeTimers().setSystemTime(new Date(2026, 0, 1, 5, 0, 0));
+      vi.useFakeTimers().setSystemTime(new Date(2026, 0, 1, 5, 0, 0));
       q.findMonitors.mockResolvedValue([
         monitor({ name: 'skipped', refreshPeriod: 24 }),
         monitor({ name: 'ran', refreshPeriod: 5 }),
