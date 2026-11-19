@@ -48,12 +48,16 @@ backend/src/lib/           wrappers over outside services (AWS RDS, Google Sheet
 backend/src/model/         plain types for things crossing a boundary (sqs event, payloads)
 backend/src/model/Db.ts    dbStateSchema — the zod schema GET /api/db answers with
 backend/src/model/error/   HttpError and the two subclasses the api throws
+backend/tools/openapi.ts   generates openapi.json from the routes; run by npm run openapi
+backend/openapi.json       the generated document, COMMITTED; CI fails if it is stale
 backend/regression/        database-backed tests; setup.ts also holds the local environment
 backend/docker-compose.yml MySQL + CockroachDB for those tests, started with db:up
 backend/package.json       the deployed version number lives here, as it always has
 backend/aws/cloudformation/template.yaml   ALL infrastructure, including the webapp's
                            S3 bucket, CloudFront distribution and Route53 record
 webapp/app/                Next.js app router; page.tsx is the whole ui today
+webapp/types/api.ts        the webapp's view of the api: aliases into the generated types
+webapp/types/openapi.d.ts  generated from backend/openapi.json, NOT committed
 webapp/next.config.ts      output:'export' in production only, trailingSlash:true
 db/*.sql                   DDL, applied by hand. There is no drizzle-kit and no migration
                            runner; db/schema/ only has to agree with these files
@@ -136,6 +140,20 @@ npm run dev:webapp    # next dev
 npm run build:webapp  # static export into webapp/out
 ```
 
+Also forwarded, for the api document:
+
+```sh
+npm run openapi       # regenerate openapi.json from the routes. Commit the result
+```
+
+In `webapp/`, usually not by hand — `postinstall`, `predev`, `prebuild` and
+`pretypecheck` all run it, so a stale copy cannot survive anything you would do before
+noticing:
+
+```sh
+npm run api:types     # backend/openapi.json -> types/openapi.d.ts
+```
+
 In `backend/`, not forwarded because they need Docker:
 
 ```sh
@@ -148,12 +166,14 @@ npm run test:regression # vitest run --dir regression -- db:up has to be up
 Notes:
 - `backend`'s `pre:commit` script is **broken** — it calls a `build` script that does not
   exist. Use `npm run pre:dev`, or `npm run lint && npm test && npm run pre:deploy`.
-- **`npm run lint` fails on a clean checkout.** `src/model/Ip.ts` and
-  `src/model/Logger.ts` are committed with CRLF line endings and prettier is configured
-  for LF, so `lint:format` lists both and exits 1 — nothing to do with whatever you
-  changed. It has never been noticed because no workflow runs lint. Normalising the two
-  files is a whitespace-only commit of its own, and it has to happen before lint can be
-  made a CI gate.
+- **A `git checkout` of a file used to be enough to make `lint:format` fail on it.**
+  Everything in this repository is stored with LF and prettier is configured for LF, but
+  git's local config here has `core.autocrlf=true`, which rewrote text files to CRLF on
+  checkout — and `git diff` showed nothing, because git normalises before comparing. The
+  `.gitattributes` at the root (`* text=auto eol=lf`) pins it, and also protects
+  `deploy.sh`, which a Linux runner cannot execute with carriage returns in it. If an
+  existing working tree still shows phantom modifications, `git add --renormalize .` once
+  clears them. Do not "fix" this by converting files — the blobs are already LF.
 - `tsc` is invoked as `tspc` (ts-patch) so that `typescript-transform-paths` rewrites the
   `src/*` aliases in the emitted `lib/` output. Plain `tsc` produces unloadable Lambda code.
 - `strict`, `noUnusedLocals`, `noUnusedParameters` and `noEmitOnError` are on; prefix
@@ -208,8 +228,8 @@ Notes:
   invalidation with it. The hashed assets under `/_next/static/*` are the ones that could
   safely be cached long-term; that needs its own behavior plus matching headers in
   `deploy.sh`, and is not worth it for a single page.
-- GitHub Actions: push to `dev` → `deploy.sh test`; push to `master` → `deploy.sh prod`.
-  **Any commit on `dev` or `master` deploys.** Work on a `release-x.y.z` branch and open a
+- GitHub Actions: push to `dev` → `deploy.sh test`; push to `master` → `deploy.sh prod`,
+  each behind the `checks` job. **Any commit on `dev` or `master` deploys.** Work on a `release-x.y.z` branch and open a
   PR, following the existing history (`release 1.1.4` bumps `backend/package.json`, then PR
   into `dev`/`master`).
 - Default working branch is `dev`; `master` is production.
@@ -218,6 +238,18 @@ Notes:
   code alone is not enough.
 - Schema changes are manual: add the DDL to `db/*.sql` **and** apply it to the real database;
   nothing runs it for you.
+- **A release is gated now**, which it never used to be. Both workflows call
+  [.github/workflows/checks.yml](.github/workflows/checks.yml) and `needs:` it, so a
+  failure stops the deploy: backend typecheck, lint, unit tests, the openapi staleness
+  check, and the webapp's typecheck. It is a reusable workflow rather than steps copied
+  into both files because two copies of a gate drift, and the half that drifts is always
+  the one guarding production. Everything in it runs **before** the AWS credentials step,
+  so a release either stops before touching anything or runs to the end.
+  `deploy.sh` itself still runs no checks, and the regression suite is still not in CI —
+  it needs MySQL and CockroachDB as service containers, which is its own change.
+- The `checks` job uses `actions/checkout@v4` and `setup-node@v4`; the deploy jobs are
+  still on `@v2`/`@v3` and `configure-aws-credentials@v1`. Bumping those is a separate
+  change, since it touches the step that actually deploys.
 
 ## Gotchas
 
@@ -303,10 +335,14 @@ Notes:
   `main` at a CommonJS build, so `require` and the node10 type lookup both land. This was
   the one risk that could have forced `moduleResolution` to change and chained into the
   whole tsconfig; it did not. Verify it again before adding any other `hono/*` subpath.
-- **`zod` is pinned to 3.x to match `castor`**, not because 4 fails. Nothing is shared
-  between the repos, so this is only about one toolchain to know; upgrading is a joint
-  change for both. `hono-openapi` 1.x reads schemas through standard-schema and does not
-  depend on `zod-openapi` at all, unlike `castor`'s generator.
+- **`zod` is 4.x here and 3.x in `castor`, deliberately.** It was going to match castor
+  until the generator was actually run: on zod 3, `hono-openapi` converts schemas through
+  `zod-openapi` v4 and fails without it, and making `.describe()` reach the document then
+  needs `import 'zod-openapi/extend'` for its side effect — a subpath that this project's
+  classic `node` moduleResolution cannot resolve, which would have meant a third tsconfig
+  just for `tools/`. On zod 4, `hono-openapi` uses zod's own JSON Schema conversion:
+  no `zod-openapi` dependency, no side-effect import, descriptions carried across for
+  free. Nothing is shared between the repos, so the versions diverging costs nothing.
 - **`.use('/api/db/*', bearerAuth)` also covers `/api/db` itself.** Hono's wildcard matches
   the empty remainder, which is what lets one line gate a whole group, and it matters for
   more than tidiness: it means a method-mismatched request (`POST /api/db`) is authorised
@@ -326,6 +362,44 @@ Notes:
   event carries a `multiValueHeaders` key — which API Gateway's REST payload 1.0 always
   does. Both shapes are valid and API Gateway accepts either, but a smoke test that builds
   its own event decides which branch it exercises.
+
+### The OpenAPI document
+
+- **`backend/openapi.json` is generated, committed, and checked.** `npm run openapi`
+  (`tools/openapi.ts`) builds it from the route definitions; the webapp's types are
+  generated from the committed file; and CI regenerates it and fails if the result
+  differs. The check is what makes the document worth having — a committed document with
+  nothing comparing it to the code rots into a confident lie. Never edit it by hand.
+- **The generator imports the app, which is why it is safe.** `openAPIRouteHandler` walks
+  the composed routes; nothing is invoked, no database is opened and no AWS api is called.
+  So it needs no credentials and runs in CI on a bare checkout.
+- **Only a route with a `describeRoute` appears in the document at all.** An undocumented
+  route is absent, not listed without a schema — which is what would make it safe to
+  adopt this one route group at a time, and also means the path count the generator prints
+  is not a count of what the api serves.
+- **Document every status a route can answer, including the ones a middleware produces.**
+  `bearerAuth` is mounted on the whole group, so all three routes carry a 401. Leaving it
+  out would describe an api that cannot refuse anyone.
+- **The error body is a schema too** (`src/model/error/schema.ts`), so a 401 and a 403
+  are typed in the webapp rather than being a status with an opaque body. That is the
+  response the ui actually has to explain.
+- **The webapp never hand-writes an api type.** `webapp/types/api.ts` holds one alias per
+  endpoint into the generated `types/openapi.d.ts`, which is **not** committed —
+  `postinstall`, `predev`, `prebuild` and `pretypecheck` all regenerate it, so a stale
+  copy cannot survive anything you would run before noticing. The aliases exist because
+  `operations['getApiDb']['responses'][200]['content']['application/json']` is unreadable
+  in a type error, and because one alias per endpoint is the only place to change when an
+  operationId does. This is the same arrangement as `castor`, whose migration to it found
+  that most of the hand-written types it replaced were wrong.
+- **The `Ok<K>` / `Err<K, S>` helpers resolve to `never` when the operation has no such
+  response.** That fails at the alias, loudly, instead of quietly at the call site — so
+  if an operationId or a status disappears from the document, `npm run typecheck` in
+  `webapp/` is what tells you.
+- **There are no `components.schemas` in this document.** zod 4's conversion inlines the
+  response schema at each use, so `DbState` is three identical inline objects rather than
+  a `$ref`. It makes the document repetitive and changes nothing about the generated
+  types. Naming a component would mean a per-schema ref annotation; not worth it for one
+  schema.
 
 ### The local databases
 

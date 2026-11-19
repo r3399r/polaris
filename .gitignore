@@ -11,6 +11,11 @@ backend/dist
 webapp/.next
 webapp/out
 webapp/next-env.d.ts
+# Generated from backend/openapi.json by webapp's `npm run api:types`, which
+# postinstall/predev/prebuild/pretypecheck all run -- so a stale copy cannot
+# survive anything you would do before noticing. openapi.json itself IS
+# committed, and CI fails if regenerating it changes it.
+webapp/types/openapi.d.ts
 *.tsbuildinfo
 
 # test files

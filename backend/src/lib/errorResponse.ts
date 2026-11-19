@@ -1,12 +1,5 @@
 import { ContentfulStatusCode } from 'hono/utils/http-status';
-import { HttpError } from 'src/model/error';
-
-export type ErrorResponseBody = {
-  status: number;
-  name: string;
-  message: string;
-  code?: string;
-};
+import { ErrorResponseBody, HttpError } from 'src/model/error';
 
 /**
  * Turns anything thrown inside a route into the response for it.

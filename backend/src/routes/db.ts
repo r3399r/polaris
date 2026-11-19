@@ -2,19 +2,31 @@ import { Hono } from 'hono';
 import { describeRoute, resolver } from 'hono-openapi';
 import { getState, isReadOnly, startDb, stopDb } from 'src/logic/RdsService';
 import { dbStateSchema } from 'src/model/Db';
-import { ForbiddenError } from 'src/model/error';
+import { errorResponseSchema, ForbiddenError } from 'src/model/error';
 
 const state = {
   description: 'The state of the instance after the call',
   content: { 'application/json': { schema: resolver(dbStateSchema) } },
 };
 
+const error = (description: string) => ({
+  description,
+  content: { 'application/json': { schema: resolver(errorResponseSchema) } },
+});
+
+/**
+ * Every route can answer this one -- `bearerAuth` is mounted on the whole
+ * group in app.ts -- so every route documents it. Leaving it out would make
+ * the document describe an api that cannot refuse anyone.
+ */
+const unauthorized = error('Missing or wrong bearer token');
+
 const getDoc = describeRoute({
   summary: "This environment's MySQL instance",
   description:
     'Each environment reports its own instance. Available in production too, where it is read-only.',
   tags: ['db'],
-  responses: { 200: state },
+  responses: { 200: state, 401: unauthorized },
 });
 
 const startDoc = describeRoute({
@@ -24,7 +36,8 @@ const startDoc = describeRoute({
   tags: ['db'],
   responses: {
     200: state,
-    403: { description: 'Read-only environment' },
+    401: unauthorized,
+    403: error('Read-only environment: this is not the test environment'),
   },
 });
 
@@ -35,7 +48,8 @@ const stopDoc = describeRoute({
   tags: ['db'],
   responses: {
     200: state,
-    403: { description: 'Read-only environment' },
+    401: unauthorized,
+    403: error('Read-only environment: this is not the test environment'),
   },
 });
 

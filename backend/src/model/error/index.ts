@@ -5,4 +5,6 @@
  */
 export { ForbiddenError } from './ForbiddenError';
 export { HttpError } from './HttpError';
+export { errorResponseSchema } from './schema';
+export type { ErrorResponseBody } from './schema';
 export { UnauthorizedError } from './UnauthorizedError';

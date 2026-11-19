@@ -4,6 +4,11 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "regression/**/*.ts", "vitest.config.mts"],
+  "include": [
+    "src/**/*.ts",
+    "regression/**/*.ts",
+    "tools/**/*.ts",
+    "vitest.config.mts"
+  ],
   "exclude": ["node_modules", "lib", "dist"]
 }

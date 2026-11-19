@@ -11,6 +11,7 @@
     "test:coverage": "cd backend && npm run test:coverage",
     "pre:dev": "cd backend && npm run pre:dev",
     "pre:deploy": "cd backend && npm run pre:deploy",
+    "openapi": "cd backend && npm run openapi",
     "dev:webapp": "cd webapp && npm run dev",
     "build:webapp": "cd webapp && npm run build"
   }
