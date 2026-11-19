@@ -1,8 +1,9 @@
 {
   "name": "polaris-root",
+  "version": "1.2.0",
   "private": true,
   "license": "ISC",
-  "//": "Deliberately NOT an npm workspace. backend/build:layer ships the Lambda layer by copying backend/node_modules wholesale; workspace hoisting would move those packages to the root and the layer would deploy nearly empty -- a stack that reports success and then throws Cannot find module on every invocation. backend/ and webapp/ each install their own tree. The deployed version number stays in backend/package.json, where it has always been.",
+  "//": "Deliberately NOT an npm workspace -- though the reason it could not be is gone. build:layer used to ship a Lambda layer by copying backend/node_modules wholesale, and workspace hoisting would have moved those packages to the root and deployed the layer nearly empty: a stack that reports success and then throws Cannot find module on every invocation. esbuild bundles each lambda from its own entry now and there is no layer. backend/ and webapp/ still install their own tree, and this file still only forwards scripts. The `version` above is the WHOLE REPO's, and the only one: deploy.sh ships the backend and the webapp together from one commit, and the webapp's api types are generated from backend/openapi.json at build time, so the two cannot be at different versions. Neither sub-package carries a version of its own.",
   "scripts": {
     "lint": "cd backend && npm run lint",
     "fix": "cd backend && npm run fix",

@@ -1,6 +1,6 @@
 {
   "name": "polaris",
-  "version": "1.1.5",
+  "private": true,
   "author": "Yue Chang",
   "scripts": {
     "lint:es": "eslint src regression tools",

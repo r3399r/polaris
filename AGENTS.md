@@ -32,7 +32,8 @@ Two databases are involved: **CockroachDB** (`monitor`, `monitor_his`) and
 ## Layout
 
 ```
-package.json               root; ONLY forwards scripts into backend/ (see the workspaces gotcha)
+package.json               root; forwards scripts, and holds the ONE version number
+                           (see the workspaces gotcha)
 deploy.sh                  backend stack first, then the webapp export to S3
 backend/src/lambda/        one entry per lambda — get a db handle, call a service, catch.
                            Each is bundled separately, so the entry decides what ships
@@ -56,7 +57,7 @@ backend/tools/openapi.ts   generates openapi.json from the routes; run by npm ru
 backend/openapi.json       the generated document, COMMITTED; CI fails if it is stale
 backend/regression/        database-backed tests; setup.ts also holds the local environment
 backend/docker-compose.yml MySQL + CockroachDB for those tests, started with db:up
-backend/package.json       the deployed version number lives here, as it always has
+backend/package.json       no version of its own any more -- the repo has one, at the root
 backend/aws/cloudformation/template.yaml   ALL infrastructure, including the webapp's
                            S3 bucket, CloudFront distribution and Route53 record
 webapp/app/                Next.js app router; page.tsx is the only route today
@@ -265,9 +266,28 @@ Notes:
   safely be cached long-term; that needs its own behavior plus matching headers in
   `deploy.sh`, and is not worth it for a single page.
 - GitHub Actions: push to `dev` → `deploy.sh test`; push to `master` → `deploy.sh prod`,
-  each behind the `checks` job. **Any commit on `dev` or `master` deploys.** Work on a `release-x.y.z` branch and open a
-  PR, following the existing history (`release 1.1.4` bumps `backend/package.json`, then PR
-  into `dev`/`master`).
+  each behind the `checks` job. **Any commit on `dev` or `master` deploys.** Work on a
+  `release-x.y.z` branch and open a PR, following the existing history: the branch carries
+  one commit that bumps the version, which is then merged into `dev` *and* separately into
+  `master` -- which is why the two branches diverge by merge commits while their content
+  does not.
+- **There is one version number, in the root `package.json`, and nothing reads it.**
+  `deploy.sh`, the template, the api and the webapp all ignore it; its only consumer is the
+  `release-x.y.z` branch name. It covers the whole repo rather than a deployable each,
+  because the two are not independently deployable -- one `deploy.sh` run ships both from
+  one commit, and the webapp's api types are generated from `backend/openapi.json` at build
+  time, so a version skew between them cannot exist. It used to live in
+  `backend/package.json`, which stopped being the repo when `webapp/` arrived. Neither
+  sub-package carries a version now, and neither does either lockfile: `npm ci` reads
+  `packages[""]`, which npm keeps in step. `castor` is not the model here -- its
+  `backend_new` says 0.1.0, its `webapp` says 1.0.0 and its release branches say 1.0.x,
+  three numbers that agree with nothing.
+- **`openapi.json`'s `info.version` is a different number on purpose.** It is the api
+  contract's version and moves when a request or response shape moves, not every release.
+  Pinned at 1.0.0 with the reason in `tools/openapi.ts`.
+- **There are no git tags.** Nothing records which release is in production except the
+  merge history. Tagging `vX.Y.Z` on `master` after the merge is one command and would give
+  a rollback a target to name; nobody has started.
 - Default working branch is `dev`; `master` is production.
 - Changing an environment variable, schedule, memory or runtime means editing
   [backend/aws/cloudformation/template.yaml](backend/aws/cloudformation/template.yaml) —
