@@ -30,6 +30,10 @@ const spec = new Hono().get(
     documentation: {
       info: {
         title: 'polaris API',
+        // The API CONTRACT's version, not the release's -- deliberately not
+        // wired to the repo version in the root package.json. It moves when
+        // the shape of a request or a response moves, which is not every
+        // deploy. Do not "fix" the fact that it differs from the release.
         version: '1.0.0',
         description:
           'The api behind the polaris back-office webapp. Generated from the backend route definitions by tools/openapi.ts -- do not edit by hand.\n\nEvery request needs `Authorization: Bearer <UI_SECRET>`, one password shared by both environments. Served from the same hostname as the webapp, as a second origin on one CloudFront distribution, so there is no cross-origin request to configure.',
