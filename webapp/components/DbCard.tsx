@@ -12,7 +12,7 @@ import {
 } from '@/lib/api';
 import type { DbState } from '@/types/api';
 
-const POLL_MS = 10_000;
+const POLL_MS = 30_000;
 
 type Call = (secret: string) => Promise<DbState>;
 
@@ -33,6 +33,28 @@ const dot = (status: string): string => {
 
 const BUTTON =
   'rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700';
+
+/** A clock time, lifted out of the muted note it sits in so it can be scanned. */
+const Time = ({ children }: { children: string }) => (
+  <span className="font-medium text-neutral-700 dark:text-neutral-300">
+    {children}
+  </span>
+);
+
+/**
+ * The notes under the card, in Chinese -- they are the half of this page that
+ * explains rather than labels.
+ *
+ * Held as string literals, and spliced with `{'...'}` where a time is lifted
+ * out, because **JSX joins the lines of a text node with a single space**. In
+ * English that is invisible; in Chinese, which does not space its words, every
+ * line prettier wraps would put a gap in the middle of a sentence.
+ */
+const READ_ONLY_NOTE =
+  '這個環境只能檢視。啟動與停止僅在 test 環境開放,而這裡的 IAM 角色沒有這兩項權限。';
+
+const AUTO_STOP_NOTE =
+  '(台北時間)會自動關閉,前提是當下正在執行中。AWS 會在停止滿 7 天後強制啟動,這兩個時間點把因此浪費的時間壓在半天左右。';
 
 /**
  * This environment's MySQL instance: what it is doing, and the two buttons
@@ -144,13 +166,23 @@ export const DbCard = ({ secret, onUnauthorized }: Props) => {
         </button>
       </div>
 
-      <p className="text-xs text-neutral-500 dark:text-neutral-500">
-        {state.readOnly
-          ? 'This environment can only report. Starting and stopping are open in test only, and the role here has no permission for either.'
-          : polling
-            ? `Following the instance, every ${POLL_MS / 1000}s.`
-            : 'AWS force-starts a stopped instance after 7 days.'}
-      </p>
+      <div
+        lang="zh-Hant"
+        className="flex flex-col gap-1 text-xs text-neutral-500 dark:text-neutral-500"
+      >
+        {state.readOnly ? (
+          <p>{READ_ONLY_NOTE}</p>
+        ) : (
+          <p>
+            {'每天 '}
+            <Time>05:00</Time>
+            {' 與 '}
+            <Time>19:00</Time>
+            {AUTO_STOP_NOTE}
+          </p>
+        )}
+        {polling && <p>{`正在追蹤狀態,每 ${POLL_MS / 1000} 秒更新一次。`}</p>}
+      </div>
 
       {error && (
         <p role="alert" className="text-sm text-rose-600 dark:text-rose-400">

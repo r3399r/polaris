@@ -452,10 +452,26 @@ Notes:
   is the only signal the browser gets that the secret was changed on the server. The
   password screen checks a new password against the api *before* storing it, so a wrong
   one is never written to the browser at all.
-- **The page polls while RDS is between states** — every 10s, and only while the tab is
+- **The page polls while RDS is between states** — every 30s, and only while the tab is
   visible, until the status is `available` or `stopped`. Those two are the only statuses
   RDS will not leave on its own; `starting`, `stopping`, `backing-up` and `modifying` all
   resolve without anyone doing anything.
+- **The notes under the card are in Chinese, and that changes how they are written.**
+  **JSX joins the lines of a text node with a single space** — invisible in English,
+  but Chinese does not space its words, so every line prettier wrapped would put a gap
+  mid-sentence. The notes are therefore string literals spliced in with `{'...'}`, never
+  bare JSX text, and the block carries `lang="zh-Hant"` because the document is `lang="en"`.
+  Labels, buttons and error messages are still English.
+- **The card states the stop-db schedule, and those times are duplicated.** `DbCard`
+  tells the viewer the instance is stopped at 05:00 and 19:00 Taipei time, because "why
+  did my database turn itself off" is the first thing the page should answer. The api does
+  not report the schedule, so the times are written into the component and have to be
+  changed in **both** places if
+  [the template](backend/aws/cloudformation/template.yaml)'s `ScheduleStopDb` changes.
+  The note is shown when `readOnly` is false, i.e. in test -- the only environment the
+  `stop-db` lambda exists in at all. Those are two separate mechanisms that agree only
+  because both read `TARGET_ENVR`; making prod writable would have to stop this note
+  coming with it.
 - **The webapp has no test runner.** `npm run typecheck` and `npm run lint` are the whole
   of what guards it, in CI too. Worth adding when there is a second page;
   `castor/webapp` is the reference.
