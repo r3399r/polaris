@@ -1,0 +1,39 @@
+{
+  "name": "polaris-webapp",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "lint:es": "eslint app components lib types next.config.ts eslint.config.mjs",
+    "fix:es": "npm run lint:es -- --fix",
+    "lint:format": "prettier --config ./prettierrc.json --list-different \"./**/*.{ts,tsx,mjs,css}\"",
+    "fix:format": "npm run lint:format -- --write",
+    "lint": "run-p lint:*",
+    "fix": "run-s fix:*",
+    "typecheck": "tsc --noEmit",
+    "api:types": "openapi-typescript ../backend/openapi.json -o types/openapi.d.ts",
+    "postinstall": "npm run api:types",
+    "predev": "npm run api:types",
+    "prebuild": "npm run api:types",
+    "pretypecheck": "npm run api:types"
+  },
+  "dependencies": {
+    "next": "^15.3.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^15.5.29",
+    "npm-run-all": "^4.1.5",
+    "openapi-typescript": "^7.13.0",
+    "prettier": "^3.10.1",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.8.0"
+  }
+}

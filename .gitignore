@@ -1,9 +1,25 @@
 # Dependency directories
 node_modules/
 
-# Built files
-dist
-lib
+# Built files.
+# Anchored to backend/ deliberately: a bare `lib` or `dist` pattern also matches
+# anything of that name under webapp/, which would be source, and drops it from
+# every commit -- it still builds locally and then fails in CI.
+# db/migration has its own .gitignore for its dist/node_modules/.env.
+backend/dist
+webapp/.next
+webapp/out
+webapp/next-env.d.ts
+# Generated from backend/openapi.json by webapp's `npm run api:types`, which
+# postinstall/predev/prebuild/pretypecheck all run -- so a stale copy cannot
+# survive anything you would do before noticing. openapi.json itself IS
+# committed, and CI fails if regenerating it changes it.
+webapp/types/openapi.d.ts
+*.tsbuildinfo
+
+# DEV_API_ORIGIN for `next dev`'s api proxy. Anchored like the build outputs
+# above; .env.local.example is committed and says what goes in it.
+webapp/.env.local
 
 # test files
 tmp

@@ -1,0 +1,80 @@
+# Local databases for the regression suite. Started with `npm run db:up`.
+#
+# Two deliberate differences from castor's compose file:
+#
+#   * No volumes. castor persists its MySQL data because the same container is
+#     its local development database; polaris has no local app, so every
+#     `db:up` after a `db:down` gets a clean schema, which is what the suite
+#     wants and removes any "init already ran" problem.
+#   * Non-default host ports. castor binds MySQL on 3306, so sharing that would
+#     mean only one of the two repos could have its database up at a time.
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      # The code uses PROJECT as the user AND the database name, so both have
+      # to be `polaris` -- see src/db/mysql.ts.
+      MYSQL_DATABASE: polaris
+      MYSQL_USER: polaris
+      MYSQL_PASSWORD: polarislocal
+    ports:
+      - '3307:3306'
+    volumes:
+      # Run in name order against MYSQL_DATABASE. log_api and ip have no
+      # foreign keys between them, so unlike castor the order is arbitrary.
+      - ../db/log_api.sql:/docker-entrypoint-initdb.d/01_log_api.sql:ro
+      - ../db/ip.sql:/docker-entrypoint-initdb.d/02_ip.sql:ro
+    healthcheck:
+      test:
+        ['CMD', 'mysqladmin', 'ping', '-h', 'localhost', '-u', 'root', '-proot']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  cockroach:
+    # Pinned to the 24.3 line. The four tables use nothing version-sensitive,
+    # but this should track whatever the CockroachDB Cloud cluster runs.
+    image: cockroachdb/cockroach:latest-v24.3
+    # No --listen-addr. Its default is `:26257`, which already means every
+    # interface; spelling out a hostname is what trips --insecure's check that
+    # the host be 127.0.0.1 or localhost, and the node then refuses to start
+    # with `hostname of listen_addr must be "127.0.0.1" or "localhost"`.
+    command: start-single-node --insecure
+    ports:
+      - '26258:26257'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          '/cockroach/cockroach',
+          'sql',
+          '--insecure',
+          '--execute=select 1',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # CockroachDB has no /docker-entrypoint-initdb.d, so the schema is applied by
+  # a one-shot container once the node is healthy. It drops and recreates the
+  # database rather than using CREATE TABLE IF NOT EXISTS, so running `db:up`
+  # twice is harmless and always leaves a clean schema -- the db/*.sql files
+  # stay exactly as they are applied to the real cluster.
+  cockroach-init:
+    image: cockroachdb/cockroach:latest-v24.3
+    depends_on:
+      cockroach:
+        condition: service_healthy
+    volumes:
+      - ../db:/db:ro
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - >
+        /cockroach/cockroach sql --insecure --host=cockroach
+        --execute="drop database if exists polaris cascade; create database polaris"
+        && /cockroach/cockroach sql --insecure --host=cockroach
+        --database=polaris --file=/db/monitor.sql
+        && /cockroach/cockroach sql --insecure --host=cockroach
+        --database=polaris --file=/db/monitor_his.sql
+    restart: 'no'

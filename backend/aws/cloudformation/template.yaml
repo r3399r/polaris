@@ -1,0 +1,470 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: "AWS::Serverless-2016-10-31"
+Description: polaris deployment cloudformation script
+    
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+      Timeout: 30  # in seconds
+Parameters:
+  Project:
+    Type: String
+  TargetEnvr:
+    Type: String
+    Description: The target environment for API Gateway deployment.
+  SubDomain:
+    Type: String
+  Domain:
+    Type: String
+Conditions:
+  # cost saving resources only exist in the test environment
+  IsTestEnvr: !Equals [!Ref TargetEnvr, test]
+  # prod owns the bare subdomain, every other environment is suffixed
+  IsProd: !Equals [!Ref TargetEnvr, prod]
+Resources:
+  ##########################################
+  ##### AWS IAM Role to execute lambda #####
+  ##########################################
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      RoleName: !Sub ${Project}-${TargetEnvr}-lambda-execution-role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSLambda_FullAccess
+        - arn:aws:iam::aws:policy/AmazonSQSFullAccess
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+  ############################################
+  ##### AWS IAM Role to stop the test db #####
+  ############################################
+  # scoped to the single test instance, so it can never touch prod
+  StopDbExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: IsTestEnvr
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      RoleName: !Sub ${Project}-${TargetEnvr}-stop-db-role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub ${Project}-${TargetEnvr}-stop-db-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # rds:DescribeDBInstances does not support resource-level permissions
+              - Effect: Allow
+                Action: rds:DescribeDBInstances
+                Resource: '*'
+              - Effect: Allow
+                Action: rds:StopDBInstance
+                Resource: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:celestial-studio-mysql-${TargetEnvr}
+  #################################################
+  ##### AWS IAM Role for the stop-db schedule #####
+  #################################################
+  StopDbSchedulerRole:
+    Type: AWS::IAM::Role
+    Condition: IsTestEnvr
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      RoleName: !Sub ${Project}-${TargetEnvr}-stop-db-scheduler-role
+      Policies:
+        - PolicyName: !Sub ${Project}-${TargetEnvr}-stop-db-invoke-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt LambdaStopDb.Arn
+  ##############################################
+  ##### API Gateway and associated Lambdas #####
+  ##############################################
+  LambdaMonitor:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: [arm64]
+      Handler: index.eventBridgeMonitor
+      Runtime: nodejs24.x
+      FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
+      Role: !GetAtt ExecutionRole.Arn
+      CodeUri: ../../dist/monitor
+      MemorySize: 160
+      Environment:
+        Variables:
+          PROJECT: !Sub ${Project}
+          COCKROACH_DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
+          COCKROACH_DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
+          COCKROACH_DB_PASSWORD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
+          COCKROACH_DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          SHEET_ID: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-spreadsheet-id}}'
+          CLIENT_EMAIL: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-client-email}}'
+          PRIVATE_KEY: !Sub '{{resolve:ssm:${Project}-${TargetEnvr}-private-key}}'
+          SQL_LIMIT: 500
+  InvokePermissionMonitor:
+    Type: AWS::Lambda::Permission
+    DependsOn: [EventBridgeMonitor, LambdaMonitor]
+    Properties:
+      FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventBridgeMonitor.Arn
+  LambdaHouseKeeping:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: [arm64]
+      Handler: index.eventBridgeHouseKeeping
+      Runtime: nodejs24.x
+      FunctionName: !Sub ${Project}-${TargetEnvr}-house-keeping
+      Role: !GetAtt ExecutionRole.Arn
+      CodeUri: ../../dist/houseKeeping
+      MemorySize: 128
+      Timeout: 180
+      Environment:
+        Variables:
+          PROJECT: !Sub ${Project}
+          COCKROACH_DB_CLUSTER: !Sub '{{resolve:ssm:${TargetEnvr}-db-cluster}}'
+          COCKROACH_DB_HOST: !Sub '{{resolve:ssm:${TargetEnvr}-db-host}}'
+          COCKROACH_DB_PASSWORD: !Sub '{{resolve:ssm:${TargetEnvr}-db-pwd}}'
+          COCKROACH_DB_USER: !Sub '{{resolve:ssm:${TargetEnvr}-db-user}}'
+          MYSQL_DB_HOST:
+            Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
+          MYSQL_DB_PASSWORD: !Sub '{{resolve:ssm:mysql-${TargetEnvr}-${Project}-pwd}}'
+          RESET_SQL_STATS: false
+  InvokePermissionHouseKeeping:
+    Type: AWS::Lambda::Permission
+    DependsOn: [EventBridgeHouseKeeping, LambdaHouseKeeping]
+    Properties:
+      FunctionName: !Sub ${Project}-${TargetEnvr}-house-keeping
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventBridgeHouseKeeping.Arn
+  LambdaLogger:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: [arm64]
+      Handler: index.logger
+      Runtime: nodejs24.x
+      FunctionName: !Sub ${Project}-${TargetEnvr}-logger
+      Role: !GetAtt ExecutionRole.Arn
+      CodeUri: ../../dist/logger
+      MemorySize: 128
+      Environment:
+        Variables:
+          PROJECT: !Sub ${Project}
+          MYSQL_DB_HOST:
+            Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
+          MYSQL_DB_PASSWORD: !Sub '{{resolve:ssm:mysql-${TargetEnvr}-${Project}-pwd}}'
+  LambdaStopDb:
+    Type: AWS::Serverless::Function
+    Condition: IsTestEnvr
+    Properties:
+      Architectures: [arm64]
+      Handler: index.eventBridgeStopDb
+      Runtime: nodejs24.x
+      FunctionName: !Sub ${Project}-${TargetEnvr}-stop-db
+      Role: !GetAtt StopDbExecutionRole.Arn
+      CodeUri: ../../dist/stopDb
+      MemorySize: 128
+      Environment:
+        Variables:
+          MYSQL_DB_HOST:
+            Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
+  ##############################################################
+  ##### The webapp's api. Deployed in both environments, and #####
+  ##### each reports its OWN database -- but only test may   #####
+  ##### act on it. The role below is where that is enforced: #####
+  ##### prod gets rds:DescribeDBInstances and nothing more,  #####
+  ##### so the production instance cannot be stopped from    #####
+  ##### here whatever the handler or the ui does.            #####
+  ##############################################################
+  ApiExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      RoleName: !Sub ${Project}-${TargetEnvr}-api-role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub ${Project}-${TargetEnvr}-api-rds-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # rds:DescribeDBInstances does not support resource-level permissions
+              - Effect: Allow
+                Action: rds:DescribeDBInstances
+                Resource: '*'
+              # Test only. A list entry resolving to AWS::NoValue is dropped,
+              # and the statement above keeps the list non-empty, so the prod
+              # role simply has no way to start or stop anything.
+              - !If
+                - IsTestEnvr
+                - Effect: Allow
+                  Action:
+                    - rds:StartDBInstance
+                    - rds:StopDBInstance
+                  Resource: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:celestial-studio-mysql-${TargetEnvr}
+                - !Ref AWS::NoValue
+  # AWS::Serverless::Api with one proxy route, deliberately matching castor
+  # rather than the cheaper AWS::Serverless::HttpApi. HttpApi's selling points
+  # here would have been CORS configuration and price; CloudFront serves the
+  # api and the webapp from one hostname so there is no CORS, and at this
+  # traffic the price difference is noise.
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Sub ${TargetEnvr}
+      EndpointConfiguration: REGIONAL
+  LambdaApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: [arm64]
+      Handler: index.api
+      Runtime: nodejs24.x
+      FunctionName: !Sub ${Project}-${TargetEnvr}-api
+      Role: !GetAtt ApiExecutionRole.Arn
+      CodeUri: ../../dist/api
+      MemorySize: 128
+      Environment:
+        Variables:
+          # Each environment reports its own instance, derived from this.
+          MYSQL_DB_HOST:
+            Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
+          # Anything other than `test` makes the api read-only. See
+          # isReadOnly() in logic/RdsService.ts for why the polarity is that
+          # way round.
+          TARGET_ENVR: !Sub ${TargetEnvr}
+          # The webapp is a static bundle and cannot hold a secret, so the
+          # viewer types this once and the browser sends it as a bearer token.
+          #
+          # ONE parameter for both environments, deliberately: it is one
+          # person's password for one tool, and two of them would be friction
+          # with no benefit. It MUST exist in SSM before this deploys -- a
+          # {{resolve:ssm}} for a missing parameter fails the whole stack
+          # update, which is exactly what stopped an earlier attempt at this
+          # feature from ever reaching AWS.
+          UI_SECRET: !Sub '{{resolve:ssm:${Project}-ui-secret}}'
+      Events:
+        AnyRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /{proxy+}
+            Method: ANY
+  #######################
+  ######### SQS #########
+  #######################
+  EventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: [LambdaLogger]
+    Properties:
+      FunctionName: !GetAtt LambdaLogger.Arn
+      EventSourceArn: 
+        Fn::ImportValue: !Sub ${Project}-${TargetEnvr}-logger-queue-arn
+      BatchSize: 50
+      MaximumBatchingWindowInSeconds: 300
+      ScalingConfig:
+        MaximumConcurrency: 2
+      Enabled: true
+  #######################
+  ##### EventBridge #####
+  #######################
+  EventBridgeMonitor:
+    Type: AWS::Events::Rule
+    DependsOn: [LambdaMonitor]
+    Properties:
+      Name: !Sub ${Project}-${TargetEnvr}-monitor
+      ScheduleExpression: cron(1 0 * * ? *)
+      State: ENABLED
+      Targets: 
+        - Arn: !GetAtt LambdaMonitor.Arn
+          Id: !Sub ${Project}-${TargetEnvr}-monitor
+  EventBridgeHouseKeeping:
+    Type: AWS::Events::Rule
+    DependsOn: [LambdaHouseKeeping]
+    Properties:
+      Name: !Sub ${Project}-${TargetEnvr}-house-keeping
+      ScheduleExpression: cron(31 19 * * ? *)
+      State: ENABLED
+      Targets: 
+        - Arn: !GetAtt LambdaHouseKeeping.Arn
+          Id: !Sub ${Project}-${TargetEnvr}-house-keeping
+  #################################
+  ##### EventBridge Scheduler #####
+  #################################
+  # EventBridge Scheduler (not Events::Rule) so the hours can be written in local
+  # time. In UTC these are 21:00 the previous day and 11:00, which is readable
+  # only with a comment, and stops being expressible as one rule the moment a
+  # day-of-week restriction is added.
+  ScheduleStopDb:
+    Type: AWS::Scheduler::Schedule
+    Condition: IsTestEnvr
+    Properties:
+      Name: !Sub ${Project}-${TargetEnvr}-stop-db
+      Description: Stop the test db at 05:00 and 19:00 Taiwan time
+      State: ENABLED
+      # 05:00 catches an instance left running overnight after late-evening dev,
+      # 19:00 catches one left running after weekend daytime dev
+      ScheduleExpression: cron(0 5,19 * * ? *)
+      ScheduleExpressionTimezone: Asia/Taipei
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      Target:
+        Arn: !GetAtt LambdaStopDb.Arn
+        RoleArn: !GetAtt StopDbSchedulerRole.Arn
+        RetryPolicy:
+          MaximumRetryAttempts: 2
+
+  #############################################
+  ##### Webapp hosting: S3 + CloudFront    #####
+  #############################################
+  # Serves webapp/out, the Next.js static export. There is deliberately no api
+  # origin here yet -- when one is added it becomes a second origin on this same
+  # distribution with an /api/* behavior, which is what keeps the browser's
+  # calls same-origin and means no CORS anywhere.
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${Project}-${TargetEnvr}-y
+      WebsiteConfiguration:
+        # A static export has no server to answer an unknown path, and the
+        # client router needs the shell, so 404 serves index.html too.
+        ErrorDocument: index.html
+        IndexDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: [S3Bucket]
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # The CloudFront origin is the S3 *website* endpoint, which does not
+          # support OAC/OAI, so the objects have to be anonymously readable.
+          - Sid: PublicReadForWebsiteOrigin
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub ${S3Bucket.Arn}/*
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn: [S3Bucket]
+    Properties:
+      DistributionConfig:
+        Aliases: [!If [IsProd, !Sub '${SubDomain}.${Domain}', !Sub '${SubDomain}-${TargetEnvr}.${Domain}']]
+        Origins:
+          - DomainName: !Select [1, !Split ["//", !GetAtt S3Bucket.WebsiteURL]]
+            Id: S3-hosted-website-ID
+            CustomOriginConfig:
+              # an S3 website endpoint only speaks http, never https
+              OriginProtocolPolicy: http-only
+          - DomainName: !Sub ${RestApi}.execute-api.${AWS::Region}.amazonaws.com
+            Id: !Sub ${Project}-${TargetEnvr}-api-ID
+            # The stage name is part of the api gateway url but not of the path
+            # the browser asks for, so it is prepended here instead.
+            OriginPath: !Sub /${TargetEnvr}
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginKeepaliveTimeout: 5
+              OriginProtocolPolicy: https-only
+        Enabled: 'true'
+        HttpVersion: http2
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          AllowedMethods: ["GET", "HEAD", "OPTIONS"]
+          TargetOriginId: S3-hosted-website-ID
+          Compress: true
+          ForwardedValues:
+            QueryString: 'false'
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+          # Uncached, and it has to stay that way while deploy.sh runs no
+          # invalidation: the export's paths do not change between releases, so
+          # any TTL here keeps serving the previous release. The hashed assets
+          # under /_next/static/* are the ones that could safely be cached; that
+          # needs its own behavior plus the matching headers on upload, and is
+          # not worth it for a single page.
+          DefaultTTL: 0
+          MinTTL: 0
+          MaxTTL: 0
+        CacheBehaviors:
+          - PathPattern: /api/*
+            AllowedMethods:
+              ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'POST', 'DELETE']
+            Compress: true
+            TargetOriginId: !Sub ${Project}-${TargetEnvr}-api-ID
+            ForwardedValues:
+              # Authorization MUST be forwarded or every request arrives
+              # without its bearer token and answers 401. Forwarding puts it in
+              # the cache key as a side effect, which is harmless at TTL 0 and
+              # is what would stop one viewer's response reaching another if a
+              # TTL were ever added here.
+              Headers: ['Authorization', 'Accept']
+              QueryString: true
+            ViewerProtocolPolicy: redirect-to-https
+            DefaultTTL: 0
+            MinTTL: 0
+            MaxTTL: 0
+        PriceClass: PriceClass_200
+        ViewerCertificate:
+          # The shared *.celestialstudio.net certificate, also used by castor
+          # and pollux. A CloudFront certificate must live in us-east-1 whatever
+          # region the stack is in.
+          AcmCertificateArn: arn:aws:acm:us-east-1:278497686406:certificate/8914c993-68c7-4e06-b741-def8fc0270ba
+          MinimumProtocolVersion: TLSv1
+          SslSupportMethod: sni-only
+  Route53RecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub '${Domain}.'
+      Name: !If [IsProd, !Sub '${SubDomain}.${Domain}.', !Sub '${SubDomain}-${TargetEnvr}.${Domain}.']
+      Type: A
+      AliasTarget:
+        # fixed magic id for a CloudFront alias, identical in every region
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+Outputs:
+  SiteUrl:
+    Description: The webapp
+    Value: !If [IsProd, !Sub 'https://${SubDomain}.${Domain}', !Sub 'https://${SubDomain}-${TargetEnvr}.${Domain}']
+  ApiEndpoint:
+    Description: The api gateway stage directly, bypassing CloudFront. Useful for curl.
+    Value: !Sub https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${TargetEnvr}

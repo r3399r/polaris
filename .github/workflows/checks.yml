@@ -1,0 +1,81 @@
+# The checks that run before a deploy, defined once and called by both dev.yml
+# and prod.yml. Nothing here needs AWS credentials, and that is the point: the
+# credentials step comes after, so a release either stops before it has touched
+# anything or runs to the end. It is also why this is a reusable workflow
+# rather than copied into both files -- two copies of a gate drift, and the
+# half that drifts is always the one guarding production.
+#
+# Until this existed, neither workflow ran anything at all: they configured
+# credentials and called deploy.sh, which runs no lint and no tests either. So
+# this is the first thing that has ever gated a polaris release.
+#
+# The regression suite is deliberately absent. It needs MySQL and CockroachDB
+# as service containers, which is its own change; `castor` has not done that
+# half either.
+name: Checks
+
+on:
+  workflow_call:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            webapp/package-lock.json
+
+      # Not `npm i`: a lock file that does not match package.json should fail
+      # here rather than resolve to something nobody has run locally.
+      - name: Install backend
+        working-directory: backend
+        run: npm ci
+
+      - name: Typecheck backend
+        working-directory: backend
+        run: npm run typecheck
+
+      - name: Lint backend
+        working-directory: backend
+        run: npm run lint
+
+      - name: Unit tests
+        working-directory: backend
+        run: npm run test:unit
+
+      # openapi.json is committed, and everything the webapp knows about the
+      # api is generated from it. Regenerating it here is what stops it from
+      # rotting into a lie: a route changed without a regenerate fails the
+      # release instead of shipping a document that describes the old api.
+      - name: OpenAPI document is up to date
+        working-directory: backend
+        run: |
+          npm run openapi
+          if [ -n "$(git status --porcelain -- openapi.json)" ]; then
+            echo "::error::openapi.json is stale. Run 'npm run openapi' in backend/ and commit the result."
+            git --no-pager diff -- openapi.json
+            exit 1
+          fi
+
+      # The webapp's own types come from that document, via `pretypecheck`.
+      # Checked here because the alternative is finding out during deploy.sh,
+      # which has already deployed the backend by the time it builds the
+      # webapp.
+      - name: Install webapp
+        working-directory: webapp
+        run: npm ci
+
+      - name: Typecheck webapp
+        working-directory: webapp
+        run: npm run typecheck
+
+      - name: Lint webapp
+        working-directory: webapp
+        run: npm run lint

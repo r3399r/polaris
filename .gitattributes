@@ -1,0 +1,15 @@
+# This repository stores every text file with LF, and three things depend on
+# that: prettier is configured for LF (`lint:format` lists a CRLF file as
+# different), `sh deploy.sh` runs on a Linux runner and a CRLF script fails on
+# the carriage returns, and the committed openapi.json is compared byte for
+# byte by CI.
+#
+# Git on this machine has `core.autocrlf=true` in its local config, which
+# rewrites text files to CRLF on checkout -- so a plain `git checkout` of a
+# file was enough to make `npm run lint` fail on it, with nothing in the diff
+# to explain why. Pinning eol here fixes it for every clone without anyone
+# having to change a git setting.
+#
+# After adding this, `git add --renormalize .` once brings an existing working
+# tree into line.
+* text=auto eol=lf

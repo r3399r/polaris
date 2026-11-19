@@ -1,0 +1,347 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "polaris API",
+    "description": "The api behind the polaris back-office webapp. Generated from the backend route definitions by tools/openapi.ts -- do not edit by hand.\n\nEvery request needs `Authorization: Bearer <UI_SECRET>`, one password shared by both environments. Served from the same hostname as the webapp, as a second origin on one CloudFront distribution, so there is no cross-origin request to configure.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://polaris.celestialstudio.net",
+      "description": "production"
+    },
+    {
+      "url": "https://polaris-test.celestialstudio.net",
+      "description": "test"
+    }
+  ],
+  "components": {},
+  "paths": {
+    "/api/db": {
+      "get": {
+        "operationId": "getApiDb",
+        "summary": "This environment's MySQL instance",
+        "description": "Each environment reports its own instance. Available in production too, where it is read-only.",
+        "tags": [
+          "db"
+        ],
+        "responses": {
+          "200": {
+            "description": "The state of the instance after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "identifier": {
+                      "type": "string",
+                      "description": "RDS instance identifier, e.g. celestial-studio-mysql-test"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "The instance's RDS status verbatim: available, stopped, starting, stopping, backing-up, modifying, ... or `unknown` if RDS reported none"
+                    },
+                    "canStart": {
+                      "type": "boolean",
+                      "description": "Whether POST /api/db/start would be accepted right now"
+                    },
+                    "canStop": {
+                      "type": "boolean",
+                      "description": "Whether POST /api/db/stop would be accepted right now"
+                    },
+                    "readOnly": {
+                      "type": "boolean",
+                      "description": "True outside the test environment, where the instance can only be reported. Lets the ui say why the buttons are dead instead of leaving it indistinguishable from a transition"
+                    }
+                  },
+                  "required": [
+                    "identifier",
+                    "status",
+                    "canStart",
+                    "canStop",
+                    "readOnly"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "number",
+                      "description": "Repeats the http status, for logging"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The error class, e.g. ForbiddenError or InternalServerError"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Safe to show a viewer. Always `Internal Server Error` on a 500 -- an unexpected error's own message is logged and dropped"
+                    },
+                    "code": {
+                      "description": "A stable identifier to branch on, e.g. FORBIDDEN",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "name",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/db/start": {
+      "post": {
+        "operationId": "postApiDbStart",
+        "summary": "Start the instance",
+        "description": "Test environment only; 403 elsewhere. A no-op unless the status is exactly `stopped` -- RDS rejects a start during any transition.",
+        "tags": [
+          "db"
+        ],
+        "responses": {
+          "200": {
+            "description": "The state of the instance after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "identifier": {
+                      "type": "string",
+                      "description": "RDS instance identifier, e.g. celestial-studio-mysql-test"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "The instance's RDS status verbatim: available, stopped, starting, stopping, backing-up, modifying, ... or `unknown` if RDS reported none"
+                    },
+                    "canStart": {
+                      "type": "boolean",
+                      "description": "Whether POST /api/db/start would be accepted right now"
+                    },
+                    "canStop": {
+                      "type": "boolean",
+                      "description": "Whether POST /api/db/stop would be accepted right now"
+                    },
+                    "readOnly": {
+                      "type": "boolean",
+                      "description": "True outside the test environment, where the instance can only be reported. Lets the ui say why the buttons are dead instead of leaving it indistinguishable from a transition"
+                    }
+                  },
+                  "required": [
+                    "identifier",
+                    "status",
+                    "canStart",
+                    "canStop",
+                    "readOnly"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "number",
+                      "description": "Repeats the http status, for logging"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The error class, e.g. ForbiddenError or InternalServerError"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Safe to show a viewer. Always `Internal Server Error` on a 500 -- an unexpected error's own message is logged and dropped"
+                    },
+                    "code": {
+                      "description": "A stable identifier to branch on, e.g. FORBIDDEN",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "name",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Read-only environment: this is not the test environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "number",
+                      "description": "Repeats the http status, for logging"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The error class, e.g. ForbiddenError or InternalServerError"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Safe to show a viewer. Always `Internal Server Error` on a 500 -- an unexpected error's own message is logged and dropped"
+                    },
+                    "code": {
+                      "description": "A stable identifier to branch on, e.g. FORBIDDEN",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "name",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/db/stop": {
+      "post": {
+        "operationId": "postApiDbStop",
+        "summary": "Stop the instance",
+        "description": "Test environment only; 403 elsewhere. A no-op unless the status is exactly `available`.",
+        "tags": [
+          "db"
+        ],
+        "responses": {
+          "200": {
+            "description": "The state of the instance after the call",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "identifier": {
+                      "type": "string",
+                      "description": "RDS instance identifier, e.g. celestial-studio-mysql-test"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "The instance's RDS status verbatim: available, stopped, starting, stopping, backing-up, modifying, ... or `unknown` if RDS reported none"
+                    },
+                    "canStart": {
+                      "type": "boolean",
+                      "description": "Whether POST /api/db/start would be accepted right now"
+                    },
+                    "canStop": {
+                      "type": "boolean",
+                      "description": "Whether POST /api/db/stop would be accepted right now"
+                    },
+                    "readOnly": {
+                      "type": "boolean",
+                      "description": "True outside the test environment, where the instance can only be reported. Lets the ui say why the buttons are dead instead of leaving it indistinguishable from a transition"
+                    }
+                  },
+                  "required": [
+                    "identifier",
+                    "status",
+                    "canStart",
+                    "canStop",
+                    "readOnly"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "number",
+                      "description": "Repeats the http status, for logging"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The error class, e.g. ForbiddenError or InternalServerError"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Safe to show a viewer. Always `Internal Server Error` on a 500 -- an unexpected error's own message is logged and dropped"
+                    },
+                    "code": {
+                      "description": "A stable identifier to branch on, e.g. FORBIDDEN",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "name",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Read-only environment: this is not the test environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "number",
+                      "description": "Repeats the http status, for logging"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The error class, e.g. ForbiddenError or InternalServerError"
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Safe to show a viewer. Always `Internal Server Error` on a 500 -- an unexpected error's own message is logged and dropped"
+                    },
+                    "code": {
+                      "description": "A stable identifier to branch on, e.g. FORBIDDEN",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "name",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

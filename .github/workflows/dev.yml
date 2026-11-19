@@ -9,8 +9,14 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
+  # Typecheck, lint, unit tests, and the openapi/webapp-types check. Defined in
+  # checks.yml so dev and prod cannot drift apart. `needs` below is what makes
+  # a failure here stop the deploy.
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   build:
+    needs: checks
     # The type of runner that the job will run on
     runs-on: ubuntu-latest
 

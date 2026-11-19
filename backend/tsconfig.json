@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "declaration": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "importHelpers": true,
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "es2022"
+    ],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noEmitOnError": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "outDir": "lib",
+    "resolveJsonModule": true,
+    "paths": {
+      "src/*": [
+        "src/*"
+      ],
+      "test/*": [
+        "test/*"
+      ]
+    },
+    "rootDir": ".",
+    "skipLibCheck": true,
+    "sourceMap": false,
+    "strict": true,
+    "target": "es2022"
+  },
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "index.ts"
+  ],
+  "exclude": [
+    "src/**/*.test.ts"
+  ]
+}
