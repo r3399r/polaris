@@ -197,6 +197,96 @@ Resources:
         Variables:
           MYSQL_DB_HOST:
             Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
+  ##############################################################
+  ##### The webapp's api. Deployed in both environments, and #####
+  ##### each reports its OWN database -- but only test may   #####
+  ##### act on it. The role below is where that is enforced: #####
+  ##### prod gets rds:DescribeDBInstances and nothing more,  #####
+  ##### so the production instance cannot be stopped from    #####
+  ##### here whatever the handler or the ui does.            #####
+  ##############################################################
+  ApiExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      RoleName: !Sub ${Project}-${TargetEnvr}-api-role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub ${Project}-${TargetEnvr}-api-rds-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # rds:DescribeDBInstances does not support resource-level permissions
+              - Effect: Allow
+                Action: rds:DescribeDBInstances
+                Resource: '*'
+              # Test only. A list entry resolving to AWS::NoValue is dropped,
+              # and the statement above keeps the list non-empty, so the prod
+              # role simply has no way to start or stop anything.
+              - !If
+                - IsTestEnvr
+                - Effect: Allow
+                  Action:
+                    - rds:StartDBInstance
+                    - rds:StopDBInstance
+                  Resource: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:celestial-studio-mysql-${TargetEnvr}
+                - !Ref AWS::NoValue
+  # AWS::Serverless::Api with one proxy route, deliberately matching castor
+  # rather than the cheaper AWS::Serverless::HttpApi. HttpApi's selling points
+  # here would have been CORS configuration and price; CloudFront serves the
+  # api and the webapp from one hostname so there is no CORS, and at this
+  # traffic the price difference is noise.
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Sub ${TargetEnvr}
+      EndpointConfiguration: REGIONAL
+  LambdaApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures: [arm64]
+      Handler: index.api
+      Runtime: nodejs24.x
+      FunctionName: !Sub ${Project}-${TargetEnvr}-api
+      Role: !GetAtt ApiExecutionRole.Arn
+      CodeUri: ../../lib/src
+      MemorySize: 128
+      Layers: [!Ref LambdaLayer]
+      Environment:
+        Variables:
+          # Each environment reports its own instance, derived from this.
+          MYSQL_DB_HOST:
+            Fn::ImportValue: !Sub celestial-studio-${TargetEnvr}-db-endpoint
+          # Anything other than `test` makes the api read-only. See
+          # isReadOnly() in logic/RdsService.ts for why the polarity is that
+          # way round.
+          TARGET_ENVR: !Sub ${TargetEnvr}
+          # The webapp is a static bundle and cannot hold a secret, so the
+          # viewer types this once and the browser sends it as a bearer token.
+          #
+          # ONE parameter for both environments, deliberately: it is one
+          # person's password for one tool, and two of them would be friction
+          # with no benefit. It MUST exist in SSM before this deploys -- a
+          # {{resolve:ssm}} for a missing parameter fails the whole stack
+          # update, which is exactly what stopped an earlier attempt at this
+          # feature from ever reaching AWS.
+          UI_SECRET: !Sub '{{resolve:ssm:${Project}-ui-secret}}'
+      Events:
+        AnyRoute:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /{proxy+}
+            Method: ANY
   LambdaLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
@@ -317,6 +407,16 @@ Resources:
             CustomOriginConfig:
               # an S3 website endpoint only speaks http, never https
               OriginProtocolPolicy: http-only
+          - DomainName: !Sub ${RestApi}.execute-api.${AWS::Region}.amazonaws.com
+            Id: !Sub ${Project}-${TargetEnvr}-api-ID
+            # The stage name is part of the api gateway url but not of the path
+            # the browser asks for, so it is prepended here instead.
+            OriginPath: !Sub /${TargetEnvr}
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginKeepaliveTimeout: 5
+              OriginProtocolPolicy: https-only
         Enabled: 'true'
         HttpVersion: http2
         DefaultRootObject: index.html
@@ -338,6 +438,24 @@ Resources:
           DefaultTTL: 0
           MinTTL: 0
           MaxTTL: 0
+        CacheBehaviors:
+          - PathPattern: /api/*
+            AllowedMethods:
+              ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'POST', 'DELETE']
+            Compress: true
+            TargetOriginId: !Sub ${Project}-${TargetEnvr}-api-ID
+            ForwardedValues:
+              # Authorization MUST be forwarded or every request arrives
+              # without its bearer token and answers 401. Forwarding puts it in
+              # the cache key as a side effect, which is harmless at TTL 0 and
+              # is what would stop one viewer's response reaching another if a
+              # TTL were ever added here.
+              Headers: ['Authorization', 'Accept']
+              QueryString: true
+            ViewerProtocolPolicy: redirect-to-https
+            DefaultTTL: 0
+            MinTTL: 0
+            MaxTTL: 0
         PriceClass: PriceClass_200
         ViewerCertificate:
           # The shared *.celestialstudio.net certificate, also used by castor
@@ -360,3 +478,6 @@ Outputs:
   SiteUrl:
     Description: The webapp
     Value: !If [IsProd, !Sub 'https://${SubDomain}.${Domain}', !Sub 'https://${SubDomain}-${TargetEnvr}.${Domain}']
+  ApiEndpoint:
+    Description: The api gateway stage directly, bypassing CloudFront. Useful for curl.
+    Value: !Sub https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${TargetEnvr}

@@ -1,6 +1,7 @@
 import {
   DescribeDBInstancesCommand,
   RDSClient,
+  StartDBInstanceCommand,
   StopDBInstanceCommand,
 } from '@aws-sdk/client-rds';
 
@@ -18,6 +19,12 @@ export const describeDbInstance = async (identifier: string) => {
   );
 
   return res.DBInstances?.[0];
+};
+
+export const startDbInstance = async (identifier: string) => {
+  await getClient().send(
+    new StartDBInstanceCommand({ DBInstanceIdentifier: identifier })
+  );
 };
 
 export const stopDbInstance = async (identifier: string) => {

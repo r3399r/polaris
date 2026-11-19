@@ -8,15 +8,14 @@ Guidance for AI coding agents working in this repository.
 It holds two deployables in one repo:
 
 - **`backend/`** — AWS Lambda functions (TypeScript, CommonJS, Node 24, arm64) deployed with
-  AWS SAM/CloudFormation. There is no HTTP API — every entry point is triggered by
-  EventBridge or SQS.
+  AWS SAM/CloudFormation. Most entry points are EventBridge or SQS; there is also one small
+  HTTP api.
 - **`webapp/`** — a Next.js static export (`output: 'export'`) served out of S3 through a
-  CloudFront distribution at `polaris.celestialstudio.net`. It has **no backend of its own
-  yet**: there is deliberately no API Gateway, so the page is static and calls nothing. When
-  an api is added it becomes a second origin on that same distribution with an `/api/*`
-  behavior, which keeps the browser's calls same-origin and means no CORS anywhere.
+  CloudFront distribution at `polaris.celestialstudio.net`. The api is a **second origin on
+  that same distribution**, on an `/api/*` behavior, so the browser only ever talks to one
+  hostname: there is no CORS configuration anywhere, and no public api url to find.
 
-Four handlers, all exported from [backend/src/index.ts](backend/src/index.ts):
+Five handlers, all exported from [backend/src/index.ts](backend/src/index.ts):
 
 | Export | Trigger | Job |
 | --- | --- | --- |
@@ -24,6 +23,7 @@ Four handlers, all exported from [backend/src/index.ts](backend/src/index.ts):
 | `eventBridgeHouseKeeping` | cron `31 19 * * ? *` | Prunes `monitor_his` (14 days), `log_api` (3 months or 130k rows) and `ip` (3 months); optionally resets CockroachDB SQL stats. |
 | `logger` | SQS (`${Project}-${TargetEnvr}-logger-queue`, batch 50) | Consumes API-log messages from the other services, enriches the caller IP via ip-api.com, writes `log_api` + `ip`. |
 | `eventBridgeStopDb` | 05:00 & 19:00 Asia/Taipei, daily, **test env only** | Cost saving: stops the test MySQL RDS instance whenever it is found running. |
+| `api` | API Gateway REST api, `/{proxy+}` ANY | The webapp's backend. A Hono app ([backend/src/app.ts](backend/src/app.ts)) behind `hono/aws-lambda`'s `handle()`; the lambda export is three words long. `GET /api/db` reports **its own environment's** MySQL instance; `POST /api/db/start` and `/stop` act on it, and answer 403 outside the test environment. Every request needs `Authorization: Bearer <UI_SECRET>`. |
 
 Two databases are involved: **CockroachDB** (`monitor`, `monitor_his`) and
 **MySQL** (`log_api`, `ip`, shared `celestial-studio-${env}` instance).
@@ -34,13 +34,20 @@ Two databases are involved: **CockroachDB** (`monitor`, `monitor_his`) and
 package.json               root; ONLY forwards scripts into backend/ (see the workspaces gotcha)
 deploy.sh                  backend stack first, then the webapp export to S3
 backend/src/index.ts       lambda handlers — get a db handle, call a service, catch
+backend/src/app.ts         the http api: one Hono app, its middleware, routes and onError
+backend/src/routes/db.ts   its only route group, mounted at /api/db
+backend/src/middleware/    bearerAuth (the UI_SECRET check) and noStore
 backend/src/logic/*Service.ts  business logic, exported as plain functions
 backend/src/db/mysql.ts    getMysqlDb(): one drizzle/mysql2 pool per execution environment
 backend/src/db/cockroach.ts  getCockroachDb(): the same, over the Postgres wire protocol
 backend/src/db/schema/     drizzle table definitions, one file per engine
 backend/src/db/queries/    every statement this service issues, one file per engine
-backend/src/lib/           wrappers over outside services (AWS RDS, Google Sheets)
+backend/src/lib/           wrappers over outside services (AWS RDS, Google Sheets,
+                           ip-api) plus secret.ts, the constant-time comparison,
+                           and errorResponse.ts, what a thrown error becomes
 backend/src/model/         plain types for things crossing a boundary (sqs event, payloads)
+backend/src/model/Db.ts    dbStateSchema — the zod schema GET /api/db answers with
+backend/src/model/error/   HttpError and the two subclasses the api throws
 backend/regression/        database-backed tests; setup.ts also holds the local environment
 backend/docker-compose.yml MySQL + CockroachDB for those tests, started with db:up
 backend/package.json       the deployed version number lives here, as it always has
@@ -60,7 +67,20 @@ db/migration/              standalone one-off data-migration script, its own pac
 - **No classes, no DI container.** Everything is a module exporting plain functions.
   There is no inversify, no `@injectable()`, no `bindings.ts` — a function that needs a
   database handle takes it as its first parameter, and the handler is the only place that
-  calls `getMysqlDb()` / `getCockroachDb()`.
+  calls `getMysqlDb()` / `getCockroachDb()`. The single exception is `src/model/error/`:
+  `extends Error` is the only way to get an `instanceof` check, and that check is how
+  `lib/errorResponse.ts` tells a status the api meant to answer from a bug.
+- **The api is a Hono app, not a router in the handler.** `src/app.ts` mounts the
+  middleware and the route groups and ends in one `.onError`; `src/index.ts` exports
+  `handle(app)` and nothing else. A route group is a `new Hono()` chain in
+  `src/routes/`, mounted at its full path (`/api/db`) — same shape as `castor`.
+  A route answers by throwing: `UnauthorizedError`, `ForbiddenError`, or anything else,
+  which becomes a bare 500 with the message dropped. Nothing writes a status by hand.
+- **A response schema is a zod schema in `src/model/`, and the type comes off it**
+  (`z.infer`). `castor` keeps its response schemas in the route file, because `castor`
+  has no service layer — its queries sit in the route. polaris has one, and a service
+  that imported a route to name its own return type would have the layering backwards.
+  `.describe()` on a field is not a comment: it reaches the generated OpenAPI document.
 - **Every SQL statement lives in `src/db/queries/`.** Services never build a query; they
   call a named function from there. This is the one place polaris deliberately differs
   from `castor`, which writes drizzle queries inline in its routes — see the testing note
@@ -128,6 +148,12 @@ npm run test:regression # vitest run --dir regression -- db:up has to be up
 Notes:
 - `backend`'s `pre:commit` script is **broken** — it calls a `build` script that does not
   exist. Use `npm run pre:dev`, or `npm run lint && npm test && npm run pre:deploy`.
+- **`npm run lint` fails on a clean checkout.** `src/model/Ip.ts` and
+  `src/model/Logger.ts` are committed with CRLF line endings and prettier is configured
+  for LF, so `lint:format` lists both and exits 1 — nothing to do with whatever you
+  changed. It has never been noticed because no workflow runs lint. Normalising the two
+  files is a whitespace-only commit of its own, and it has to happen before lint can be
+  made a CI gate.
 - `tsc` is invoked as `tspc` (ts-patch) so that `typescript-transform-paths` rewrites the
   `src/*` aliases in the emitted `lib/` output. Plain `tsc` produces unloadable Lambda code.
 - `strict`, `noUnusedLocals`, `noUnusedParameters` and `noEmitOnError` are on; prefix
@@ -232,6 +258,74 @@ Notes:
   `dist` pattern also matches anything of that name under `webapp/`, which would be source,
   and silently drops it from every commit — it still builds locally and then fails in CI.
   `db/migration` has its own `.gitignore` for its `dist`/`node_modules`/`.env`.
+
+### The api
+
+- **The SSM parameter `polaris-ui-secret` must exist before either stack can deploy.**
+  `LambdaApi` resolves it for `UI_SECRET`, and a `{{resolve:ssm}}` for a missing parameter
+  fails the whole stack update — that is exactly what stopped an earlier attempt at this
+  feature from ever reaching AWS. Create it as a plain `String`: `{{resolve:ssm-secure}}`
+  is only allowed on a short allowlist of resource properties and a Lambda environment
+  variable is not one of them, which is why every secret this template reads is a plain
+  String. **One parameter serves both environments** — note the name carries no
+  `${TargetEnvr}`, unlike most of the others — because it is one person's password for one
+  tool.
+- **Each environment's api reports its own database, and only test may change it.** The
+  binding guard is IAM: the prod role gets `rds:DescribeDBInstances` and nothing else, so
+  the production instance cannot be stopped from here whatever the handler or the ui does.
+  `isReadOnly()` in `logic/RdsService.ts` is the readable half — it answers the 403 and
+  sets `readOnly` on the state so the ui can say *why* the buttons are dead, which
+  `canStart`/`canStop` alone cannot distinguish from a transition. Its polarity is
+  deliberate: anything that is not exactly `test` is read-only, so an unset or misspelled
+  `TARGET_ENVR` fails safe.
+- **403, not 404, for a forbidden mutation.** The route exists; saying so is what stops
+  someone debugging a path that is not the problem. Authorisation is still checked first,
+  so an unauthenticated caller learns nothing about the environment.
+- **The route is `/api/db`, not `/api/test-db`.** It used to be the latter, when the api was
+  test-only; now that prod serves its own instance the old name would lie.
+- **Two `!If` shapes appear in this template and they are not interchangeable.** The api's
+  start/stop IAM statement is a *list entry* that resolves to `AWS::NoValue` and is dropped,
+  which works because the describe statement keeps the list non-empty. Where the whole list
+  would otherwise become empty, `!If` has to go on the *property* instead — CloudFormation
+  rejects an empty list.
+- **The `/api/*` behavior must forward the `Authorization` header** or every request arrives
+  without its bearer token and answers 401. Forwarding puts it in the cache key, which is
+  harmless at TTL 0 and is what would stop one viewer's response reaching another if a TTL
+  were ever added.
+- The webapp is a static bundle and **holds no secret**: the viewer types the password once,
+  it lives in that browser's `localStorage`, and it is sent as a bearer token.
+  `src/lib/secret.ts` compares it in constant time. This is an interim scheme — `castor`
+  uses Firebase Auth, which is where this should go before the api serves anything more
+  sensitive than a db status.
+- **`hono` and `hono-openapi` resolve under classic `node` moduleResolution** — which they
+  have no business doing, since both ship only a `dist/`. `hono` carries a `typesVersions`
+  map covering every subpath (`aws-lambda`, `factory`, `utils/*`), and both packages point
+  `main` at a CommonJS build, so `require` and the node10 type lookup both land. This was
+  the one risk that could have forced `moduleResolution` to change and chained into the
+  whole tsconfig; it did not. Verify it again before adding any other `hono/*` subpath.
+- **`zod` is pinned to 3.x to match `castor`**, not because 4 fails. Nothing is shared
+  between the repos, so this is only about one toolchain to know; upgrading is a joint
+  change for both. `hono-openapi` 1.x reads schemas through standard-schema and does not
+  depend on `zod-openapi` at all, unlike `castor`'s generator.
+- **`.use('/api/db/*', bearerAuth)` also covers `/api/db` itself.** Hono's wildcard matches
+  the empty remainder, which is what lets one line gate a whole group, and it matters for
+  more than tidiness: it means a method-mismatched request (`POST /api/db`) is authorised
+  *before* it falls through to the default 404, so a caller without the token cannot map
+  which routes exist.
+- **Hono matches the path exactly — `/api/db/` is a 404.** The hand-rolled router this
+  replaced stripped a trailing slash. Nothing needed that: the webapp fetches these three
+  paths verbatim, and `trailingSlash: true` in `next.config.ts` is about pages, not
+  fetches. Buying the tolerance back costs either a redirect (`hono/trailing-slash`, which
+  would change a POST's method) or a second route per path, and one url per resource is the
+  better default. Pinned by a test so the answer is on record.
+- **`noStore` sets `cache-control` before `next()`, not after.** After would miss every
+  response `onError` builds — the error path being the one a cached response would be
+  worst on. Hono applies a header set before the response exists to whatever is finally
+  returned, which is what makes the ordering work.
+- **The aws-lambda adapter answers in `multiValueHeaders`, not `headers`,** whenever the
+  event carries a `multiValueHeaders` key — which API Gateway's REST payload 1.0 always
+  does. Both shapes are valid and API Gateway accepts either, but a smoke test that builds
+  its own event decides which branch it exercises.
 
 ### The local databases
 

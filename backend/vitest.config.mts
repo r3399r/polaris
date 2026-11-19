@@ -55,11 +55,15 @@ export default defineConfig({
       // Wiring only: these construct connection pools and sdk clients, which
       // every test mocks, so coverage on them would measure "was this file
       // loaded", not "was this behaviour tested". Excluded for signal.
+      //
+      // src/index.ts is NOT excluded: the api handler's routing and bearer-token
+      // check are real logic and src/index.test.ts covers them.
       exclude: [
-        'src/index.ts',
         'src/db/mysql.ts',
         'src/db/cockroach.ts',
-        'src/lib/**',
+        'src/lib/rds.ts',
+        'src/lib/googleSheets.ts',
+        'src/lib/ipApi.ts',
       ],
     },
   },
