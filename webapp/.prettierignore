@@ -1,0 +1,8 @@
+# Build output.
+.next
+out
+next-env.d.ts
+
+# Generated from backend/openapi.json by `npm run api:types`, which
+# postinstall, predev, prebuild and pretypecheck all run.
+types/openapi.d.ts

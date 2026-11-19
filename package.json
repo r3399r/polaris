@@ -13,6 +13,9 @@
     "pre:deploy": "cd backend && npm run pre:deploy",
     "openapi": "cd backend && npm run openapi",
     "dev:webapp": "cd webapp && npm run dev",
-    "build:webapp": "cd webapp && npm run build"
+    "build:webapp": "cd webapp && npm run build",
+    "lint:webapp": "cd webapp && npm run lint",
+    "fix:webapp": "cd webapp && npm run fix",
+    "typecheck:webapp": "cd webapp && npm run typecheck"
   }
 }

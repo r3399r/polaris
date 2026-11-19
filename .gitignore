@@ -18,6 +18,10 @@ webapp/next-env.d.ts
 webapp/types/openapi.d.ts
 *.tsbuildinfo
 
+# DEV_API_ORIGIN for `next dev`'s api proxy. Anchored like the build outputs
+# above; .env.local.example is committed and says what goes in it.
+webapp/.env.local
+
 # test files
 tmp
 coverage

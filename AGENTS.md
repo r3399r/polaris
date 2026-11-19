@@ -55,10 +55,18 @@ backend/docker-compose.yml MySQL + CockroachDB for those tests, started with db:
 backend/package.json       the deployed version number lives here, as it always has
 backend/aws/cloudformation/template.yaml   ALL infrastructure, including the webapp's
                            S3 bucket, CloudFront distribution and Route53 record
-webapp/app/                Next.js app router; page.tsx is the whole ui today
+webapp/app/                Next.js app router; page.tsx is the only route today
+webapp/components/         PasswordGate (the password screen) and DbCard (the status card)
+webapp/lib/api.ts          the only module that calls the api; lib/secret.ts the only one
+                           that touches localStorage
+webapp/.env.local.example  DEV_API_ORIGIN, for the dev-only /api/* proxy. .env.local itself
+                           is git-ignored
 webapp/types/api.ts        the webapp's view of the api: aliases into the generated types
 webapp/types/openapi.d.ts  generated from backend/openapi.json, NOT committed
-webapp/next.config.ts      output:'export' in production only, trailingSlash:true
+webapp/next.config.ts      output:'export' in production only, trailingSlash:true, and a
+                           dev-only /api/* proxy
+webapp/eslint.config.mjs   Next's config plus the same house rules backend/ enforces
+webapp/prettierrc.json     a copy of backend/prettierrc.json; .prettierignore beside it
 db/*.sql                   DDL, applied by hand. There is no drizzle-kit and no migration
                            runner; db/schema/ only has to agree with these files
 db/migration/              standalone one-off data-migration script, its own package.json
@@ -123,6 +131,22 @@ db/migration/              standalone one-off data-migration script, its own pac
 - Every route must be emitted as a directory with an `index.html` in it
   (`trailingSlash: true`), because the S3 website endpoint resolves a directory to its
   `IndexDocument`. Dropping that setting produces urls that 404 through CloudFront.
+- **`lib/api.ts` is the only module that calls `fetch`, and `lib/secret.ts` the only one
+  that touches `localStorage`.** Both are small on purpose: they are the whole of what a
+  component could get wrong about the contract, and the webapp has no test runner to catch
+  it if one did.
+- **No type the api sends is written by hand** — everything comes through
+  `types/api.ts`, which aliases the generated `types/openapi.d.ts`. A component that needs
+  a new field waits for the backend schema to have it.
+- **Paths to the api are relative and have no trailing slash.** One hostname, one
+  distribution, so `/api/db` is simply there; hono matches exactly, so `/api/db/` is a 404.
+- **The lint rules are the backend's plus Next's.** `curly: multi`, `arrow-body-style`,
+  `newline-before-return`, alphabetised `import/order` and the `../*` ban are all copied
+  from [backend/eslint.config.mjs](backend/eslint.config.mjs), so one repo does not hold
+  two opinions about braces; `next/core-web-vitals` and `next/typescript` add the
+  react-hooks rules and the framework's own checks, which the backend has no use for.
+  Prettier's config is a **copy** of the backend's, not a reference to it -- neither
+  package can see the other's files, and neither is a workspace.
 
 ## Commands
 
@@ -136,8 +160,12 @@ npm test              # vitest: the unit tests, then the regression suite
 npm run test:coverage
 npm run pre:dev       # fix + test:coverage — run this before committing
 npm run pre:deploy    # clean + build:lambda + build:layer (what deploy.sh runs)
-npm run dev:webapp    # next dev
+npm run dev:webapp    # next dev. Copy webapp/.env.local.example to .env.local first,
+                      # or /api/* has nothing behind it locally
 npm run build:webapp  # static export into webapp/out
+npm run lint:webapp   # eslint + prettier check over webapp/. The unsuffixed lint/fix/
+npm run fix:webapp    # typecheck scripts are backend-only, as they always have been
+npm run typecheck:webapp
 ```
 
 Also forwarded, for the api document:
@@ -241,7 +269,7 @@ Notes:
 - **A release is gated now**, which it never used to be. Both workflows call
   [.github/workflows/checks.yml](.github/workflows/checks.yml) and `needs:` it, so a
   failure stops the deploy: backend typecheck, lint, unit tests, the openapi staleness
-  check, and the webapp's typecheck. It is a reusable workflow rather than steps copied
+  check, and the webapp's typecheck and lint. It is a reusable workflow rather than steps copied
   into both files because two copies of a gate drift, and the half that drifts is always
   the one guarding production. Everything in it runs **before** the AWS credentials step,
   so a release either stops before touching anything or runs to the end.
@@ -400,6 +428,37 @@ Notes:
   a `$ref`. It makes the document repetitive and changes nothing about the generated
   types. Naming a component would mean a per-schema ref annotation; not worth it for one
   schema.
+
+### The webapp
+
+- **`next dev` has no api of its own**, so `next.config.ts` rewrites `/api/*` to
+  `DEV_API_ORIGIN` (from `webapp/.env.local`, git-ignored; copy `.env.local.example`).
+  That keeps the single-origin shape the deployed site has, so nothing in the code needs
+  to know an api url and no CORS appears locally that production would not have. The
+  rewrite is inside a `NODE_ENV !== 'production'` branch and cannot reach the export,
+  which has nowhere to run one.
+- **`trailingSlash: true` would 308 every api call to its trailing-slash form**, and hono
+  matches paths exactly, so the proxied request would arrive as a 404 — `fetch` follows a
+  308. Hence `skipTrailingSlashRedirect: true`, also dev-only. This was measured against a
+  fake upstream, not reasoned about: without it the rewrite never fires at all. Which
+  directories the export emits comes from `trailingSlash` itself and is unaffected —
+  verified by building a second route and finding `out/<route>/index.html`.
+- **The page may not read `localStorage` on its first render.** The export prerenders
+  `app/page.tsx` at build time, so the stored password is read in a `useEffect` and a
+  `ready` flag distinguishes "not looked yet" from "no password" — both of which are
+  `secret === null`. Skipping that is a hydration mismatch. The prerendered html is
+  therefore the heading and nothing else, which is correct, not a broken build.
+- **A 401 anywhere clears the stored password** and drops back to the password screen: it
+  is the only signal the browser gets that the secret was changed on the server. The
+  password screen checks a new password against the api *before* storing it, so a wrong
+  one is never written to the browser at all.
+- **The page polls while RDS is between states** — every 10s, and only while the tab is
+  visible, until the status is `available` or `stopped`. Those two are the only statuses
+  RDS will not leave on its own; `starting`, `stopping`, `backing-up` and `modifying` all
+  resolve without anyone doing anything.
+- **The webapp has no test runner.** `npm run typecheck` and `npm run lint` are the whole
+  of what guards it, in CI too. Worth adding when there is a second page;
+  `castor/webapp` is the reference.
 
 ### The local databases
 

@@ -75,3 +75,7 @@ jobs:
       - name: Typecheck webapp
         working-directory: webapp
         run: npm run typecheck
+
+      - name: Lint webapp
+        working-directory: webapp
+        run: npm run lint

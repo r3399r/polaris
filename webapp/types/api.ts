@@ -32,15 +32,13 @@ type Ok<K extends keyof operations> = operations[K]['responses'] extends {
   ? T
   : never;
 
-type Err<
-  K extends keyof operations,
-  S extends number,
-> = operations[K]['responses'] extends Record<
-  S,
-  { content: { 'application/json': infer T } }
->
-  ? T
-  : never;
+type Err<K extends keyof operations, S extends number> =
+  operations[K]['responses'] extends Record<
+    S,
+    { content: { 'application/json': infer T } }
+  >
+    ? T
+    : never;
 
 /**
  * What `GET /api/db` reports: the MySQL instance of **this** environment.
