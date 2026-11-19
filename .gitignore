@@ -6,7 +6,6 @@ node_modules/
 # anything of that name under webapp/, which would be source, and drops it from
 # every commit -- it still builds locally and then fails in CI.
 # db/migration has its own .gitignore for its dist/node_modules/.env.
-backend/lib
 backend/dist
 webapp/.next
 webapp/out

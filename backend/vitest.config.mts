@@ -34,10 +34,12 @@ const root = process
 
 export default defineConfig({
   root,
-  // tsconfig.json's `exclude` drops src/**/*.test.ts, because that is what
-  // tspc reads for the real Lambda build and a shipped test file would go into
-  // the bundle. tsconfig.tools.json covers the tests (and regression/) so the
-  // `src/*` path alias resolves in them too.
+  // tsconfig.json's `exclude` drops src/**/*.test.ts. It no longer has to --
+  // nothing is emitted from that project since esbuild took the build over,
+  // and a bundle only pulls in what its entry reaches -- but it is also what
+  // leaves the tests without a project of their own, so tsconfig.tools.json
+  // covers them (and regression/) and is where the `src/*` alias resolves for
+  // them. Collapsing the two is a separate change.
   plugins: [tsconfigPaths({ projects: ['./tsconfig.tools.json'] })],
   test: {
     environment: 'node',
@@ -57,7 +59,7 @@ export default defineConfig({
       // loaded", not "was this behaviour tested". Excluded for signal.
       //
       // src/index.ts is NOT excluded: the api handler's routing and bearer-token
-      // check are real logic and src/index.test.ts covers them.
+      // check are real logic and src/app.test.ts covers them.
       exclude: [
         'src/db/mysql.ts',
         'src/db/cockroach.ts',

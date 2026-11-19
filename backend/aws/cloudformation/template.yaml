@@ -111,9 +111,8 @@ Resources:
       Runtime: nodejs24.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-monitor
       Role: !GetAtt ExecutionRole.Arn
-      CodeUri: ../../lib/src
+      CodeUri: ../../dist/monitor
       MemorySize: 160
-      Layers: [!Ref LambdaLayer]
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
@@ -141,10 +140,9 @@ Resources:
       Runtime: nodejs24.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-house-keeping
       Role: !GetAtt ExecutionRole.Arn
-      CodeUri: ../../lib/src
+      CodeUri: ../../dist/houseKeeping
       MemorySize: 128
       Timeout: 180
-      Layers: [!Ref LambdaLayer]
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
@@ -172,9 +170,8 @@ Resources:
       Runtime: nodejs24.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-logger
       Role: !GetAtt ExecutionRole.Arn
-      CodeUri: ../../lib/src
+      CodeUri: ../../dist/logger
       MemorySize: 128
-      Layers: [!Ref LambdaLayer]
       Environment:
         Variables:
           PROJECT: !Sub ${Project}
@@ -190,9 +187,8 @@ Resources:
       Runtime: nodejs24.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-stop-db
       Role: !GetAtt StopDbExecutionRole.Arn
-      CodeUri: ../../lib/src
+      CodeUri: ../../dist/stopDb
       MemorySize: 128
-      Layers: [!Ref LambdaLayer]
       Environment:
         Variables:
           MYSQL_DB_HOST:
@@ -258,9 +254,8 @@ Resources:
       Runtime: nodejs24.x
       FunctionName: !Sub ${Project}-${TargetEnvr}-api
       Role: !GetAtt ApiExecutionRole.Arn
-      CodeUri: ../../lib/src
+      CodeUri: ../../dist/api
       MemorySize: 128
-      Layers: [!Ref LambdaLayer]
       Environment:
         Variables:
           # Each environment reports its own instance, derived from this.
@@ -287,14 +282,6 @@ Resources:
             RestApiId: !Ref RestApi
             Path: /{proxy+}
             Method: ANY
-  LambdaLayer:
-    Type: AWS::Serverless::LayerVersion
-    Properties:
-      LayerName: !Sub ${Project}-${TargetEnvr}-layer
-      CompatibleArchitectures: [arm64]
-      CompatibleRuntimes: [nodejs24.x]
-      ContentUri: ../../dist
-      RetentionPolicy: Delete
   #######################
   ######### SQS #########
   #######################

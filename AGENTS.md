@@ -15,7 +15,8 @@ It holds two deployables in one repo:
   that same distribution**, on an `/api/*` behavior, so the browser only ever talks to one
   hostname: there is no CORS configuration anywhere, and no public api url to find.
 
-Five handlers, all exported from [backend/src/index.ts](backend/src/index.ts):
+Five handlers, one per file in [backend/src/lambda/](backend/src/lambda/), each bundled
+on its own:
 
 | Export | Trigger | Job |
 | --- | --- | --- |
@@ -33,7 +34,8 @@ Two databases are involved: **CockroachDB** (`monitor`, `monitor_his`) and
 ```
 package.json               root; ONLY forwards scripts into backend/ (see the workspaces gotcha)
 deploy.sh                  backend stack first, then the webapp export to S3
-backend/src/index.ts       lambda handlers — get a db handle, call a service, catch
+backend/src/lambda/        one entry per lambda — get a db handle, call a service, catch.
+                           Each is bundled separately, so the entry decides what ships
 backend/src/app.ts         the http api: one Hono app, its middleware, routes and onError
 backend/src/routes/db.ts   its only route group, mounted at /api/db
 backend/src/middleware/    bearerAuth (the UI_SECRET check) and noStore
@@ -48,6 +50,8 @@ backend/src/lib/           wrappers over outside services (AWS RDS, Google Sheet
 backend/src/model/         plain types for things crossing a boundary (sqs event, payloads)
 backend/src/model/Db.ts    dbStateSchema — the zod schema GET /api/db answers with
 backend/src/model/error/   HttpError and the two subclasses the api throws
+backend/tools/build.ts     esbuild: src/lambda/<name>.ts -> dist/<name>/index.js, one per
+                           lambda. Where the external list and the no-minify call live
 backend/tools/openapi.ts   generates openapi.json from the routes; run by npm run openapi
 backend/openapi.json       the generated document, COMMITTED; CI fails if it is stale
 backend/regression/        database-backed tests; setup.ts also holds the local environment
@@ -83,8 +87,8 @@ db/migration/              standalone one-off data-migration script, its own pac
   `extends Error` is the only way to get an `instanceof` check, and that check is how
   `lib/errorResponse.ts` tells a status the api meant to answer from a bug.
 - **The api is a Hono app, not a router in the handler.** `src/app.ts` mounts the
-  middleware and the route groups and ends in one `.onError`; `src/index.ts` exports
-  `handle(app)` and nothing else. A route group is a `new Hono()` chain in
+  middleware and the route groups and ends in one `.onError`; `src/lambda/api.ts`
+  exports `handle(app)` and nothing else. A route group is a `new Hono()` chain in
   `src/routes/`, mounted at its full path (`/api/db`) — same shape as `castor`.
   A route answers by throwing: `UnauthorizedError`, `ForbiddenError`, or anything else,
   which becomes a bare 500 with the message dropped. Nothing writes a status by hand.
@@ -159,7 +163,7 @@ npm run typecheck     # tsc --noEmit over tsconfig.json AND tsconfig.tools.json
 npm test              # vitest: the unit tests, then the regression suite
 npm run test:coverage
 npm run pre:dev       # fix + test:coverage — run this before committing
-npm run pre:deploy    # clean + build:lambda + build:layer (what deploy.sh runs)
+npm run pre:deploy    # clean + typecheck + build (what deploy.sh runs)
 npm run dev:webapp    # next dev. Copy webapp/.env.local.example to .env.local first,
                       # or /api/* has nothing behind it locally
 npm run build:webapp  # static export into webapp/out
@@ -192,8 +196,9 @@ npm run test:regression # vitest run --dir regression -- db:up has to be up
 ```
 
 Notes:
-- `backend`'s `pre:commit` script is **broken** — it calls a `build` script that does not
-  exist. Use `npm run pre:dev`, or `npm run lint && npm test && npm run pre:deploy`.
+- `backend`'s `pre:commit` works again. It calls `build`, which did not exist while the
+  Lambda build was `build:lambda` + `build:layer`; now it does. `npm run pre:dev` is still
+  the lighter one to run before committing.
 - **A `git checkout` of a file used to be enough to make `lint:format` fail on it.**
   Everything in this repository is stored with LF and prettier is configured for LF, but
   git's local config here has `core.autocrlf=true`, which rewrote text files to CRLF on
@@ -202,15 +207,18 @@ Notes:
   `deploy.sh`, which a Linux runner cannot execute with carriage returns in it. If an
   existing working tree still shows phantom modifications, `git add --renormalize .` once
   clears them. Do not "fix" this by converting files — the blobs are already LF.
-- `tsc` is invoked as `tspc` (ts-patch) so that `typescript-transform-paths` rewrites the
-  `src/*` aliases in the emitted `lib/` output. Plain `tsc` produces unloadable Lambda code.
+- **`tsc` only ever typechecks; it emits nothing.** esbuild produces the deployed code and
+  resolves the `src/*` aliases itself, from `paths` in `tsconfig.json`. That is what
+  replaced `tspc` (ts-patch) and `typescript-transform-paths`, which existed solely to
+  rewrite those aliases in the emitted `lib/`.
 - `strict`, `noUnusedLocals`, `noUnusedParameters` and `noEmitOnError` are on; prefix
   deliberately unused params with `_`.
 - **The test runner is vitest**, as in `castor`, and `globals` is off — every test file
   imports `describe`/`it`/`expect`/`vi` from `'vitest'` explicitly. Tests live next to the
   code they cover (`vitest run --dir src`), and `exclude` in
-  [backend/tsconfig.json](backend/tsconfig.json) keeps them out of the Lambda bundle —
-  without it `tspc` emits them into `lib/` and ships them. That `exclude` is also why
+  [backend/tsconfig.json](backend/tsconfig.json) still excludes them, now only by
+  inheritance — a bundle reaches what its entry imports, so a test file cannot ship
+  whatever the project includes. That `exclude` is also why
   [backend/tsconfig.tools.json](backend/tsconfig.tools.json) exists: the tests have no
   project of their own otherwise, so the `src/*` alias would not resolve in them.
   `vite-tsconfig-paths` is pointed at that file and `npm run typecheck` checks both.
@@ -283,23 +291,24 @@ Notes:
 
 ### Repo layout and local builds
 
-- **This is NOT an npm workspace.** `backend`'s `build:layer` ships the Lambda layer by
-  copying `backend/node_modules` wholesale; workspace hoisting would move those packages up
-  to the root and the layer would deploy nearly empty — a stack that reports success and
-  then throws `Cannot find module` on every invocation. `backend/` and `webapp/` each
-  install their own tree, and the root `package.json` only forwards scripts. (Note this is
-  not what `castor`'s layer is for: that one holds `chromium-arm64.zip` and nothing else,
-  because castor bundles its app code with esbuild. Getting rid of polaris's layer means
-  switching to bundling too, which is its own change.)
+- **This is not an npm workspace, but the reason it could not be is gone.** It used to be
+  fatal: `build:layer` shipped a Lambda layer by copying `backend/node_modules` wholesale,
+  and workspace hoisting would have moved those packages to the root and deployed the layer
+  nearly empty — a stack that reports success and then throws `Cannot find module` on every
+  invocation. There is no layer and no `node_modules` copy any more. `backend/` and
+  `webapp/` still install their own tree and the root `package.json` still only forwards
+  scripts; converting them is now merely a change nobody has made, not one that would
+  break the deploy.
 - There are **no native modules left**, so `npm i` and `npm run pre:deploy` both work on
   Windows. They used not to: `pg-native` pulled in `libpq`, which needs node-gyp and a
-  Visual Studio install, and its leftovers also broke `build:layer`'s
-  `cp -R node_modules dist/nodejs`. It was dropped along with TypeORM — `pg` is pure
-  JavaScript and nothing requires the binding. Do not add it back.
-- **`npm run pre:deploy` deletes your devDependencies.** `build:layer` runs
-  `npm install --production` to prune the tree before copying it into the layer, so jest,
-  eslint and tsc are gone afterwards and `npm test` fails until you `npm i` again. Harmless
-  in CI, which is a fresh checkout; surprising locally.
+  Visual Studio install, and its leftovers also broke the `cp -R node_modules dist/nodejs`
+  the layer build did. It was dropped along with TypeORM — `pg` is pure JavaScript and
+  nothing requires the binding. Do not add it back; esbuild cannot bundle a `.node` binary
+  either.
+- **`npm run pre:deploy` no longer deletes your devDependencies.** It used to: `build:layer`
+  ran `npm install --production` to prune the tree before copying it into the layer, so
+  eslint and vitest were gone afterwards and `npm test` failed until you `npm i` again.
+  Nothing prunes anything now.
 - **The Windows drive letter's case matters, twice.** `next build` fails outright if
   invoked from a lower-case drive letter (`/c/Users/...`, as Git Bash reports it): React
   gets resolved twice, under `c:\` and `C:\`, and prerendering dies with
@@ -318,6 +327,42 @@ Notes:
   `dist` pattern also matches anything of that name under `webapp/`, which would be source,
   and silently drops it from every commit — it still builds locally and then fails in CI.
   `db/migration` has its own `.gitignore` for its `dist`/`node_modules`/`.env`.
+
+### The Lambda build
+
+- **One esbuild bundle per lambda, and that is the whole point.** `tools/build.ts` turns
+  each `src/lambda/<name>.ts` into `dist/<name>/index.js`, and each function's `CodeUri`
+  points at its own directory. A shared entry would make every function carry the union of
+  what all five import -- measured: re-exporting the five handlers from one `index.ts`
+  gives five 5-6MB bundles, while separate entries give 1.5-2.4MB each. The `Handler:`
+  values did not change and do not need to: the export name is the same, only `CodeUri`
+  moved.
+- **This replaced a Lambda layer that was nothing but `node_modules`.** 36.9MB and 90
+  packages on every function, `@types` included. `castor`'s layer is a different thing --
+  it holds `chromium-arm64.zip`, which is genuinely a layer's job.
+- **Six packages must stay `external` or the build does not start.** `hono-openapi` reaches
+  for optional schema adapters through `@standard-community/standard-json`:
+  `importIfInstalled(() => import('zod-to-json-schema'))`. The guard is a *runtime* one,
+  but esbuild resolves a dynamic import at *build* time and errors on a package that is
+  not installed. None of them is wanted -- zod 4 converts its own schemas -- so they are
+  listed in `EXTERNAL` in `tools/build.ts`, where the comment explains it. If a dependency
+  bump adds another such adapter, the build fails loudly rather than shipping something
+  broken.
+- **Nothing is minified, which is where this differs from `castor`.** Minifying saves about
+  1.3MB a function and costs every CloudWatch stack trace its line numbers. Buying those
+  back with a sourcemap costs more than not minifying did -- a 4MB map against a 1.3MB
+  saving -- plus `NODE_OPTIONS=--enable-source-maps` on every function. polaris is the
+  service you read logs *in*.
+- Adding a lambda means three things, not one: an entry in `src/lambda/`, an entry in
+  `ENTRIES` in `tools/build.ts`, and a function in the template pointing at
+  `../../dist/<name>`.
+- **esbuild's version is pinned by vitest, not by this build.** `vite` (under `vitest`)
+  declares esbuild as a `peerOptional` in a narrow range -- `^0.27 || ^0.28` at the time of
+  writing -- and before this change there was no esbuild in the tree at all, so vite ran
+  without one. Installing one outside that range resolves, hoists to the top of
+  `node_modules`, and hands vite a version it does not support. `npm uninstall` is what
+  surfaces it, as an `ERESOLVE` that names vite rather than esbuild. Keep the two in the
+  same range; bumping esbuild past what vite accepts means bumping vitest with it.
 
 ### The api
 
@@ -459,8 +504,8 @@ Notes:
 - **The notes under the card are in Chinese, and that changes how they are written.**
   **JSX joins the lines of a text node with a single space** — invisible in English,
   but Chinese does not space its words, so every line prettier wrapped would put a gap
-  mid-sentence. The notes are therefore string literals spliced in with `{'...'}`, never
-  bare JSX text, and the block carries `lang="zh-Hant"` because the document is `lang="en"`.
+  mid-sentence. Each note is therefore a string constant rendered as `{NOTE}`, never bare
+  JSX text, and the block carries `lang="zh-Hant"` because the document is `lang="en"`.
   Labels, buttons and error messages are still English.
 - **The card states the stop-db schedule, and those times are duplicated.** `DbCard`
   tells the viewer the instance is stopped at 05:00 and 19:00 Taipei time, because "why
